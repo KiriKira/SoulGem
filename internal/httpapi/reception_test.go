@@ -471,3 +471,26 @@ func TestPostgresWakeWebSocketPingsAtTheIntervalAskedFor(t *testing.T) {
 	defer conn.Close()
 	requireWakeHint(t, conn)
 }
+
+// A gateway that rings hosts until the cellular call ends asks for the long
+// window; the server takes it as is and only bounds it.
+func TestPostgresIncomingRingsAsLongAsTheGatewayAsks(t *testing.T) {
+	_, f, api := controlFixture(t)
+	handler := api.Handler()
+	if !containsJSON(requestJSON(t, handler, "GET", "/v1/capabilities", "", nil, "").Body.Bytes(), `"incoming_ring_until_end":true`) {
+		t.Fatal("incoming_ring_until_end not advertised")
+	}
+	putReceptionAs(t, api, f.clientToken, 0, true, true, http.StatusOK)
+	_, reply := offerIncoming(t, api, f, int64Pointer(180000))
+	if reply.code != http.StatusCreated {
+		t.Fatalf("long ring offer: %d %s", reply.code, reply.body)
+	}
+	call := reply.snapshot(t)
+	if window := call.ExpiresAt.Sub(call.CreatedAt); window < 179*time.Second || window > 180500*time.Millisecond {
+		t.Fatalf("ring window %v, want the 180 s the gateway asked for", window)
+	}
+	_, tooLong := offerIncoming(t, api, f, int64Pointer(maxIncomingRingMS+1))
+	if tooLong.code != http.StatusBadRequest {
+		t.Fatalf("over the bound: %d %s", tooLong.code, tooLong.body)
+	}
+}

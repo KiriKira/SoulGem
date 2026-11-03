@@ -37,7 +37,8 @@ R1 已在四个仓库的 `claude/vibrant-babbage-ye0ey3` 分支实现：
 
 ### 来电窗口
 
-- `POST /v1/rtc/control/incoming` 可选 `remaining_ring_ms`（1–60000），仅发给宣告 `reception_v2` 的节点（旧节点拒绝未知字段）。截止时间为 `min(25000, remaining_ring_ms)` 毫秒；该字段不计入操作幂等身份，重试可带更小值并重放首次结果，截止时间不变。
+- `POST /v1/rtc/control/incoming` 可选 `remaining_ring_ms`（1–300000），仅发给宣告 `reception_v2` 的节点（旧节点拒绝未知字段）。截止时间为 `remaining_ring_ms` 毫秒；该字段不计入操作幂等身份，重试可带更小值并重放首次结果，截止时间不变。
+- **振铃到蜂窝结束（`incoming_ring_until_end`）**：节点在 `/v1/capabilities` 宣告后，Homura 发送上限 300000，主机一直振铃，直到主叫挂断、网络无人接听超时、主机拒接或接听；蜂窝结束时由 Homura 照常报告 `ended`。300 秒只用于兜底网关失联。未宣告的节点仍按 25 秒窗口（`min(25000, …)` 由 Homura 计算）。主叫一侧在任何情况下都听到正常回铃，主机不接时不会被挂断。
 - 带该字段的请求在本节点没有任何可接来电的 client 时返回 503 `NO_INCOMING_SUBSCRIBERS`；不带时保持 `GATEWAY_UNAVAILABLE`。两者都不创建通话。
 - 呼叫控制快照在 ringing/connecting 等未终止状态带 `remaining_ms`，为服务端时钟下的剩余毫秒数。
 
@@ -166,8 +167,8 @@ PUT成功返回revision=8与完整当前配置。相同expected_revision重复�
 
 复用现有邀请快照，无需新增invitation资源：
 
-1. Homura真实蜂窝振铃生成已有全局call_id，并记录本地单调25秒预算。向每个节点尝试前重新计算remaining_ring_ms；过期或蜂窝结束后停止新offer。
-2. SoulGem首次成功创建时使用 `expires_at = server_now + min(25000, remaining_ring_ms)`；已有call/同一操作重试返回原截止时间，不延长。旧网关缺字段时保留原服务端25秒窗口。取消仍以真实蜂窝END为准。
+1. Homura真实蜂窝振铃生成已有全局call_id。节点宣告 `incoming_ring_until_end` 时发送300秒上限并在蜂窝结束时结束来电；否则记录本地单调25秒预算，向每个节点尝试前重新计算remaining_ring_ms；过期或蜂窝结束后停止新offer。
+2. SoulGem首次成功创建时使用 `expires_at = server_now + remaining_ring_ms`（上限300000）；已有call/同一操作重试返回原截止时间，不延长。旧网关缺字段时保留原服务端25秒窗口。取消仍以真实蜂窝END为准。
 3. 各节点的deadline可以略有不同。相对剩余预算可能包含请求在途延迟，不声称跨节点精确同步；Homura发送终态与执行前核验保证真实结束后不接听。不加入5秒时钟偏差拒绝机制。
 4. **`NO_INCOMING_SUBSCRIBERS` 只代表当前节点。** Homura现有代码已经将 `GATEWAY_UNAVAILABLE` 归为REJECTED，并继续遍历其他ready节点；不是本轮新修复的分叉缺陷。新错误码仅改善诊断，加入相同REJECTED分类；旧网关继续收到原错误。UNKNOWN创建仍按现有不确定结果/terminal队列处理。
 5. 所有节点都明确无订阅时才结束本轮远端offer，保持原蜂窝振铃，不自动接听；继续现有最终通话记录。单个无订阅节点不创建伪造参与者或占用新的控制槽；不为此重写未接历史存储。
