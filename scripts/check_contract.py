@@ -69,8 +69,9 @@ incoming_validator = Draft202012Validator(
     {'$ref': 'urn:gsm2sip:openapi#/components/schemas/RTCIncomingCall'},
     registry=registry, format_checker=FormatChecker())
 incoming = json.loads((ROOT / 'fixtures/api/rtc-control-incoming-remaining.json').read_text())
-for remaining in (0, 60001, '21400'):
+for remaining in (0, 300001, '21400'):
     assert not incoming_validator.is_valid({**incoming, 'remaining_ring_ms': remaining}), f'Bad ring window accepted: {remaining}'
+assert incoming_validator.is_valid({**incoming, 'remaining_ring_ms': 300000}), 'The ring-until-end bound was rejected'
 command_page = json.loads((ROOT / 'fixtures/api/command-list-response.json').read_text())
 Draft202012Validator(
     {'$ref': 'urn:gsm2sip:openapi#/paths/~1gateways~1{gateway_id}~1commands/get/responses/200/content/application~1json/schema'},
