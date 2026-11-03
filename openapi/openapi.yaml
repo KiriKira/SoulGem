@@ -733,13 +733,16 @@ components:
         remaining_ring_ms:
           type: integer
           minimum: 1
-          maximum: 60000
+          maximum: 300000
           description: >-
-            Incoming only, to a node advertising reception_v2. What is left of
-            the call's ring window, measured on the gateway's monotonic clock
-            from the first cellular RINGING. The call expires after
-            min(25000, remaining_ring_ms). It is not part of the operation's
-            identity: a retry may send less and replays the first answer.
+            Incoming only, to a node advertising reception_v2. How long the
+            hosts may ring, measured on the gateway's monotonic clock from the
+            first cellular RINGING; the call expires after remaining_ring_ms.
+            A gateway that sees incoming_ring_until_end sends the 300000 bound
+            and ends the call itself when the cellular call ends, so hosts ring
+            until the caller or the network gives up; others send what is left
+            of a 25 s window. It is not part of the operation's identity: a
+            retry may send less and replays the first answer.
     RTCOutgoingCall:
       allOf:
         - {$ref: '#/components/schemas/RTCControlCreate'}
@@ -1098,6 +1101,9 @@ components:
         global_decline_v1:
           type: boolean
           description: Gateways may declare global_decline; clients then see global_decline on incoming calls and may send decline_all.
+        incoming_ring_until_end:
+          type: boolean
+          description: Gateways may send remaining_ring_ms up to 300000 and end the call when the cellular call ends, so hosts ring until the caller or the network gives up.
         reception_v2:
           type: boolean
           description: >-

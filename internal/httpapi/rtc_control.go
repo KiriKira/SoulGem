@@ -154,8 +154,15 @@ func (s *Server) sleepCheck(deviceID string) {
 const rtcCandidateSQL = `c.enabled AND (c.last_seen_at>clock_timestamp()-interval '90 seconds' OR
       c.sleep_until>clock_timestamp() AND EXISTS(SELECT 1 FROM push_endpoints pe WHERE pe.device_id=c.device_id AND pe.failures=0))`
 
-// incomingRingMS is an incoming call's ring window.
+// incomingRingMS is an incoming call's ring window when the gateway does not
+// send one (older gateways).
 const incomingRingMS = 25000
+
+// maxIncomingRingMS bounds the window a gateway may ask for. A gateway that
+// advertises incoming_ring_until_end asks for this much and ends the call
+// itself when the cellular call ends (the caller or the network gives up);
+// the bound only ends a call whose gateway disappeared.
+const maxIncomingRingMS = 300000
 
 // Serialize against credential revocation before locking call rows, matching the
 // media authorizer's device -> call ordering. Recheck the exact session token.
@@ -308,7 +315,7 @@ func (s *Server) rtcControlCreate(w http.ResponseWriter, r *http.Request, p Prin
 	body.GatewayID = strings.ToLower(body.GatewayID)
 	body.SIMID = strings.ToLower(body.SIMID)
 	if body.Version != 1 || !validUUID(body.OperationID) || !validUUID(body.CallID) || !validUUID(body.GatewayID) || !validUUID(body.SIMID) || body.MappingRevision < 1 || (!incoming && (!validAddress(body.To) || body.From != "")) || (incoming && (len(body.To) > 64 || strings.ContainsAny(body.To, "\r\n"))) || len(body.From) > 64 || strings.ContainsAny(body.From, "\r\n") || (incoming && body.GatewayID != p.DeviceID) ||
-		(body.RemainingRingMS != nil && (!incoming || *body.RemainingRingMS < 1 || *body.RemainingRingMS > 60000)) {
+		(body.RemainingRingMS != nil && (!incoming || *body.RemainingRingMS < 1 || *body.RemainingRingMS > maxIncomingRingMS)) {
 		writeCallError(w, calls.ErrInvalid)
 		return
 	}
@@ -380,7 +387,7 @@ func (s *Server) rtcControlCreate(w http.ResponseWriter, r *http.Request, p Prin
 		direction = "incoming"
 		windowMS = incomingRingMS
 		if remainingRing != nil {
-			windowMS = min(windowMS, *remainingRing)
+			windowMS = *remainingRing
 		}
 		// Freeze the whole incoming fork before dispatch: it rings every client
 		// that receives incoming calls now. Others never see the call. A v2
