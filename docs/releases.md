@@ -37,8 +37,8 @@ deploy the generated files.
 
 Each release contains:
 
-- `gsm2sip-server-<version>-linux-amd64.tar.gz`
-- `gsm2sip-server-<version>-linux-arm64.tar.gz`
+- `SoulGem-<version>-linux-amd64.tar.gz`
+- `SoulGem-<version>-linux-arm64.tar.gz`
 - `release-manifest.json`, with the version, source commit, and each archive's name,
   SHA-256 digest, and byte size.
 - `SHA256SUMS.txt`, with hashes for both archives and `release-manifest.json`.
@@ -68,8 +68,8 @@ before extracting an archive:
 
 ```sh
 sha256sum -c SHA256SUMS.txt
-tar -xzf gsm2sip-server-<version>-linux-amd64.tar.gz
-cd gsm2sip-server-<version>-linux-amd64
+tar -xzf SoulGem-<version>-linux-amd64.tar.gz
+cd SoulGem-<version>-linux-amd64
 sha256sum -c SHA256SUMS
 ```
 

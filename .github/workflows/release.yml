@@ -1,4 +1,4 @@
-name: Release
+name: SoulGem release
 
 on:
   push:
@@ -173,7 +173,7 @@ jobs:
           DEBUG_BUILD: ${{ inputs.debug }}
         run: |
           set -euo pipefail
-          bundle_name="gsm2sip-server-${RELEASE_VERSION}-linux-${TARGET_ARCH}"
+          bundle_name="SoulGem-${RELEASE_VERSION}-linux-${TARGET_ARCH}"
           stage_root="$RUNNER_TEMP/server-release-${TARGET_ARCH}"
           bundle="$stage_root/$bundle_name"
           dist="$RUNNER_TEMP/server-release-assets-${TARGET_ARCH}"
@@ -246,7 +246,7 @@ jobs:
           test -s "$archive"
       - uses: actions/upload-artifact@v4
         with:
-          name: server-linux-${{ matrix.arch }}
+          name: SoulGem-linux-${{ matrix.arch }}
           path: ${{ runner.temp }}/server-release-assets-${{ matrix.arch }}/*.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -264,7 +264,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          pattern: server-linux-*
+          pattern: SoulGem-linux-*
           path: release-artifact/payload
           merge-multiple: true
       - name: Create release manifest and checksum list
@@ -284,12 +284,12 @@ jobs:
           from pathlib import Path
 
           payload = Path("release-artifact/payload")
-          archives = sorted(payload.glob("gsm2sip-server-*.tar.gz"))
+          archives = sorted(payload.glob("SoulGem-*.tar.gz"))
           if len(archives) != 2:
               raise SystemExit(f"expected two architecture archives, found {len(archives)}")
           expected = {
-              f"gsm2sip-server-{os.environ['RELEASE_VERSION']}-linux-amd64.tar.gz",
-              f"gsm2sip-server-{os.environ['RELEASE_VERSION']}-linux-arm64.tar.gz",
+              f"SoulGem-{os.environ['RELEASE_VERSION']}-linux-amd64.tar.gz",
+              f"SoulGem-{os.environ['RELEASE_VERSION']}-linux-arm64.tar.gz",
           }
           if {archive.name for archive in archives} != expected:
               raise SystemExit("release archives do not match the expected version and architectures")
@@ -314,7 +314,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: server-release-payload
+          name: SoulGem-release-payload
           path: release-artifact/
           if-no-files-found: error
           retention-days: 7
@@ -336,7 +336,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: server-release-payload
+          name: SoulGem-release-payload
           path: release-artifact
       - name: Publish GitHub Release
         shell: bash
