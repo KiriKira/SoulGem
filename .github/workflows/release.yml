@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       publish:
-        description: Publish a GitHub Release (only when run from main)
+        description: Publish a GitHub Release from main or a v* tag
         type: boolean
         required: true
         default: true
@@ -51,14 +51,16 @@ jobs:
 
           if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
             publish=true
-          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
+          elif [[ ( "$GITHUB_EVENT_NAME" == "push" || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ) && "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == v* ]]; then
             if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9][A-Za-z0-9._-]*$ || "$GITHUB_REF_NAME" == *..* || "$GITHUB_REF_NAME" == *. || "$GITHUB_REF_NAME" == *.lock ]]; then
               echo "Version tags must use a v-prefixed, safe release name" >&2
               exit 1
             fi
             version="$GITHUB_REF_NAME"
             prerelease=false
-            publish=true
+            if [[ "$GITHUB_EVENT_NAME" == "push" || "$INPUT_PUBLISH" == "true" ]]; then
+              publish=true
+            fi
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ "$INPUT_PUBLISH" == "true" && "$GITHUB_REF" == "refs/heads/main" ]]; then
               publish=true
@@ -328,7 +330,7 @@ jobs:
       (
         (github.event_name == 'push' &&
           (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
-        (github.event_name == 'workflow_dispatch' && inputs.publish == true && github.ref == 'refs/heads/main')
+        (github.event_name == 'workflow_dispatch' && inputs.publish == true && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
       )
     runs-on: ubuntu-latest
     permissions:

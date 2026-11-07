@@ -1,0 +1,54 @@
+name: Bootstrap stable v1.0.0 (SoulGem)
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: bootstrap-v1.0.0
+  cancel-in-progress: false
+
+jobs:
+  dispatch-stable:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_commit.message == 'chore(release): bootstrap stable v1.0.0'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Create an immutable tag and dispatch the existing verified release and image workflows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          tag=v1.0.0
+          current="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          if [[ "$current" != "$CHECKED_SHA" ]]; then
+            echo "::notice::Main advanced while CI ran; skip tagging an older revision."
+            exit 0
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" > /dev/null 2>&1; then
+            tagged="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha')"
+            if [[ "$tagged" != "$CHECKED_SHA" ]]; then
+              echo "::error::The immutable $tag already belongs to another commit."
+              exit 1
+            fi
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$tag" -f sha="$CHECKED_SHA" > /dev/null
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > /dev/null 2>&1; then
+            echo "::notice::A $tag release already exists; no replacement attempted."
+          else
+            gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f publish=true
+          fi
+          gh workflow run images.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f image_tag=v1.0.0 -f build_only=false
