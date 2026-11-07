@@ -117,12 +117,12 @@ jobs:
           info['sha256'] = {str(p.relative_to('debug-dist')): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path('debug-dist').rglob('*')) if p.is_file()}
           Path('debug-dist/BUILD-INFO.json').write_text(json.dumps(info, indent=2) + '\n')
           PY
-          tar -czf "gsm2sip-server-debug-linux-$GOARCH.tar.gz" -C debug-dist .
-          sha256sum gsm2sip-server-debug-linux-*.tar.gz > SHA256SUMS
+          tar -czf "SoulGem-debug-linux-$GOARCH.tar.gz" -C debug-dist .
+          sha256sum SoulGem-debug-linux-*.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: gsm2sip-server-debug-linux-${{ matrix.arch }}
+          name: SoulGem-debug-linux-${{ matrix.arch }}
           path: |
-            gsm2sip-server-debug-linux-*.tar.gz
+            SoulGem-debug-linux-*.tar.gz
             SHA256SUMS
           if-no-files-found: error
