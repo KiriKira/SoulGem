@@ -1,7 +1,7 @@
 # TURN 与节点解耦、Cloudflare 支持与 Worker 版节点：目标与计划
 
-更新：2026-11-11。状态：**目标已定，尚未实施**。本文是三端（SoulGem、Madoka、Homura）以及计划中的
-Worker 版节点新仓库共同遵守的目标文档；协议细节在对应里程碑实施时写进各自的协议文档。
+更新：2026-11-11。状态：**目标已定，尚未实施**。本文是三端（SoulGem、Madoka、Homura）以及 Worker 版新仓库
+[GriefSeed](https://github.com/KiriKira/GriefSeed) 共同遵守的目标文档；协议细节在对应里程碑实施时写进各自的协议文档。
 
 ## 背景
 
@@ -54,14 +54,20 @@ TURN 变成手机上独立配置的“**中继来源**”，和信令节点是�
 - 能直连时，ICE 本来就会优先选直连，排序只决定中继之间的先后。
 - 日志和通话界面记录最终选中的是哪个来源（例如“中继：Cloudflare”），沿用现有 `GsmRtc` 日志，不记录凭据。
 
-### G3：Cloudflare 一键部署（独立新仓库）
+### G3：Cloudflare 一键部署（独立仓库 GriefSeed）
 
-Worker 版拆成一个独立公开仓库（名称待定），README 放“Deploy to Cloudflare”按钮。分两个阶段：
+Worker 版拆到独立仓库 [GriefSeed](https://github.com/KiriKira/GriefSeed)，README 放“Deploy to Cloudflare”按钮，
+具体范围见它的 [PLAN.md](https://github.com/KiriKira/GriefSeed/blob/main/PLAN.md)。两个阶段放在同一个仓库、同一个 Worker 里，
+用户只需要部署一次。分两个阶段：
 
 - **G3a 中继来源 Worker**（小，先做）：实现中继来源协议，Cloudflare TURN key 和 API token 作为 Worker secret 保存，
   按用户 token 发放凭据。这样可以把 Cloudflare TURN 分享给别人，而不用把 API token 交给他们的手机。
 - **G3b Worker 版节点**（大，后做）：用 Durable Objects（SQLite）实现手机实际用到的 SoulGem 协议子集，
   让没有服务器的人可以把它当唯一节点，有服务器的人可以把它当冷备节点。
+
+平台只选 Cloudflare，不做 Vercel 版，也不两者都做：凭据来源发的本来就是 Cloudflare TURN 凭据；节点需要的串行状态、
+可休眠长连接和精确定时，Durable Objects 都自带，Vercel Hobby 没有自带数据库、WebSocket 单个连接最长 300 秒、
+cron 每天最多一次。GriefSeed 的协议逻辑写成和平台无关的模块，以后需要时再加别的平台适配器。
 
 ## 中继来源协议 v1（草案）
 
@@ -96,8 +102,8 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃 |
 | T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机把其他已配对节点作为来源 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
 | T4 Cloudflare 来源 | 手机直接用 TURN key 申请凭据（个人自用） | Madoka、Homura | 真机经 Cloudflare TURN、强制中继完成通话；凭据和 token 加密保存，日志不出现凭据 |
-| T5 中继来源 Worker（G3a） | 新仓库：中继来源协议、用户 token 发放和吊销、Deploy 按钮、升级说明 | 新仓库 | 从按钮全新部署到手机可用，不需要命令行；按请求预算实测一天的用量 |
-| T6 Worker 版节点（G3b） | 另起设计文档：协议子集、DO 数据模型、冷备模式、短信端到端加密、请求预算 | 新仓库、Madoka、Homura | 另行制定 |
+| T5 中继来源 Worker（G3a） | GriefSeed：中继来源协议、用户 token 发放和吊销、Deploy 按钮、升级说明 | GriefSeed | 从按钮全新部署到手机可用，不需要命令行；按请求预算实测一天的用量 |
+| T6 Worker 版节点（G3b） | 另起设计文档：协议子集、DO 数据模型、冷备模式、短信端到端加密、请求预算 | GriefSeed、Madoka、Homura | 另行制定 |
 
 T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 可以在 T5 之前单独交付。
 
@@ -109,11 +115,10 @@ T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 �
 - **多人共用**：如果一个人部署的 Worker 给多个人用，短信会存在部署者的账号里，需要旧手机和主手机之间的端到端加密，
   Worker 只转发密文。
 - **升级**：按钮创建的是复制出来的仓库，不是 fork，不会自动跟随上游更新，需要写清楚升级方法或者提供同步用的 Action。
-- **和 Kyubey 的关系**：Kyubey 已经是 Worker（推送中继），要决定 G3a/G3b 是否和它合并部署。
+- **和 Kyubey 的关系**：不合并。Kyubey 里放的是 App 的 Firebase 推送凭据，只能由维护者运营；GriefSeed 由每个用户部署到自己的账号。
 
 ## 待决定的问题
 
-1. 新仓库的名称。
-2. T4 是否允许把 Cloudflare API token 放在手机上（只限个人自用），还是只走 T5 的 Worker。token 泄露的后果是别人可以消耗你的 TURN 额度。
-3. 两部手机的中继来源是各自手动配置，还是在配对时通过二维码或节点下发一份默认配置，用户再修改。
-4. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
+1. T4 是否允许把 Cloudflare API token 放在手机上（只限个人自用），还是只走 T5 的 Worker。token 泄露的后果是别人可以消耗你的 TURN 额度。
+2. 两部手机的中继来源是各自手动配置，还是在配对时通过二维码或节点下发一份默认配置，用户再修改。
+3. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
