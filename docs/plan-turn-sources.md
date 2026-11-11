@@ -62,11 +62,12 @@ TURN 变成手机上独立配置的“**中继来源**”，和信令节点是�
 
 ### G3：Cloudflare 一键部署（独立仓库 GriefSeed）
 
-Worker 版拆到独立仓库 [GriefSeed](https://github.com/KiriKira/GriefSeed)，README 放“Deploy to Cloudflare”按钮，
-具体范围见它的 [PLAN.md](https://github.com/KiriKira/GriefSeed/blob/main/PLAN.md)。两个阶段放在同一个仓库、同一个 Worker 里，
-用户只需要部署一次。分两个阶段：
+[GriefSeed](https://github.com/KiriKira/GriefSeed) 是 **Worker 版的 SoulGem**：同一套手机协议，跑在 Workers + Durable Objects 上，
+README 放“Deploy to Cloudflare”按钮。SoulGem 自带 coturn，GriefSeed 自带的 TURN 就是 Cloudflare TURN，相关代码都放在 GriefSeed 里。
+具体范围见它的 [PLAN.md](https://github.com/KiriKira/GriefSeed/blob/main/PLAN.md)。同一个仓库、同一个 Worker，用户只需要部署一次。
+分两个阶段：
 
-- **G3a 中继来源 Worker**（小，先做）：实现中继来源协议，Cloudflare TURN key 和 API token 作为 Worker secret 保存，
+- **G3a 自带的 Cloudflare TURN**（小，先做）：实现中继来源协议，Cloudflare TURN key 和 API token 作为 Worker secret 保存，
   按用户 token 发放凭据。这样可以把 Cloudflare TURN 分享给别人，而不用把 API token 交给他们的手机。
 - **G3b Worker 版节点**（大，后做）：用 Durable Objects（SQLite）实现手机实际用到的 SoulGem 协议子集，
   让没有服务器的人可以把它当唯一节点，有服务器的人可以把它当冷备节点。
@@ -108,8 +109,8 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃 |
 | T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机加节点时自动把它加为来源，可单独关闭 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
 | T4 独立中继来源配对 | 手机支持扫 `gsm2sip://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
-| T5 中继来源 Worker（G3a） | GriefSeed：中继来源协议、用户 token 发放和吊销、Deploy 按钮、升级说明 | GriefSeed | 从按钮全新部署到手机可用，不需要命令行；按请求预算实测一天的用量 |
-| T6 Worker 版节点（G3b） | 另起设计文档：协议子集、DO 数据模型、冷备模式、短信端到端加密、请求预算 | GriefSeed、Madoka、Homura | 另行制定 |
+| T5 GriefSeed 的 Cloudflare TURN（G3a） | GriefSeed：中继来源协议、用户 token 发放和吊销、Deploy 按钮、升级说明 | GriefSeed | 从按钮全新部署到手机可用，不需要命令行；按请求预算实测一天的用量 |
+| T6 GriefSeed 节点本体（G3b） | 另起设计文档：协议子集、DO 数据模型、冷备模式、短信端到端加密、请求预算 | GriefSeed、Madoka、Homura | 另行制定 |
 
 T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 和 T5 一起开发、一起验收。
 
