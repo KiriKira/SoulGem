@@ -37,10 +37,16 @@ TURN 变成手机上独立配置的“**中继来源**”，和信令节点是�
   - **节点下发**：现状，当前节点准入里的 `ice_servers`，行为不变。
   - **节点作为中继来源**：任意一个已配对的 SoulGem 节点（不必是当前节点）通过新接口提供 TURN 凭据。
     这样平时只用一个主节点，其他节点的 coturn 也能在通话时被用上，**平时不用连它们、不用探测**。
+  - **独立中继来源**：任何实现了下面“中继来源协议”的 HTTPS 服务，不需要是节点。GriefSeed 就是其中之一，
+    它发的是 Cloudflare TURN 凭据。
   - **静态 TURN**：手工填写 URL、用户名、密码（长期凭据），适合自建、不带 SoulGem 的 coturn。
-  - **Cloudflare TURN**：凭据从 Cloudflare 申请。可以由手机直接用自己的 TURN key 申请，也可以经由 G3 的中转 Worker 申请。
-  - **通用中继来源**：任何实现了下面“中继来源协议”的 HTTPS 服务，G3 的 Worker 就是其中之一。
-- 两部手机**各自**配置、各自选择。ICE 允许两侧使用不同的中继，所以旧手机可以用离自己近的 TURN，
+- **Cloudflare API token 不放在手机上**（已决定）：Cloudflare TURN 只经由 GriefSeed 获得，token 只保存在 Worker 里。
+- 添加方式（已决定）：
+  - **添加节点时自动带上它的 TURN**：节点声明 `ice_servers_v1` 时，加节点就同时把它加为中继来源，复用这个节点的会话，
+    不需要另外配对；用户可以单独关掉某个节点的中继。GriefSeed 作为节点时，自带的 TURN 就是 Cloudflare。
+  - **单独配对一个中继来源**：扫描来源生成的链接或二维码（暂定 `gsm2sip://relay?url=...&token=...`，和现有的
+    `gsm2sip://join` 同一种方式），不用手打。链接里含 token，只在来源的管理页上显示。
+- 两部手机**各自**维护自己的来源列表、各自选择。ICE 允许两侧使用不同的中继，所以旧手机可以用离自己近的 TURN，
   主手机用 Cloudflare。
 - 已有节点**不需要改配置**。新接口靠升级 SoulGem 版本获得，不改任何环境变量。
 
@@ -100,25 +106,27 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 |---|---|---|---|
 | T1 来源抽象 | `rtcmedia` 里引入“中继来源”抽象，支持合并、去重、过滤和上限；先接入“节点下发”和“静态 TURN”；记录选中的来源 | Madoka、Homura | 单元测试覆盖合并规则；只配节点下发时行为与现在逐字节一致；KVM 模拟器里用静态 TURN、强制中继完成一次通话 |
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃 |
-| T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机把其他已配对节点作为来源 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
-| T4 Cloudflare 来源 | 手机直接用 TURN key 申请凭据（个人自用） | Madoka、Homura | 真机经 Cloudflare TURN、强制中继完成通话；凭据和 token 加密保存，日志不出现凭据 |
+| T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机加节点时自动把它加为来源，可单独关闭 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
+| T4 独立中继来源配对 | 手机支持扫 `gsm2sip://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
 | T5 中继来源 Worker（G3a） | GriefSeed：中继来源协议、用户 token 发放和吊销、Deploy 按钮、升级说明 | GriefSeed | 从按钮全新部署到手机可用，不需要命令行；按请求预算实测一天的用量 |
 | T6 Worker 版节点（G3b） | 另起设计文档：协议子集、DO 数据模型、冷备模式、短信端到端加密、请求预算 | GriefSeed、Madoka、Homura | 另行制定 |
 
-T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 可以在 T5 之前单独交付。
+T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 和 T5 一起开发、一起验收。
 
 ## G3b 的已知约束（留给 T6 设计）
 
 - **请求预算**：现有频率是给主节点用的。主手机每 15 秒探测一次节点（`NodeMonitor.kt`），通话中每 250ms 和 750ms 轮询呼叫控制，
   一通 5 分钟的电话约 1,600 次请求。Worker 版节点必须改为：冷备时主手机不探测；旧手机只保持一条可休眠的 WebSocket，
   用协议层 ping 保活；通话控制走 WebSocket；用推送唤醒。目标是冷备时每个用户每天一百次左右。
-- **多人共用**：如果一个人部署的 Worker 给多个人用，短信会存在部署者的账号里，需要旧手机和主手机之间的端到端加密，
+- **先只支持一个 owner**（已决定）：一个部署只服务一个 owner，短信只存在自己的账号里。分享给别人时，T5 的 TURN token
+  本来就支持多人；节点让每个人自己点一次部署。以后要支持多个 owner 时，必须先做旧手机和主手机之间的短信端到端加密，
   Worker 只转发密文。
 - **升级**：按钮创建的是复制出来的仓库，不是 fork，不会自动跟随上游更新，需要写清楚升级方法或者提供同步用的 Action。
 - **和 Kyubey 的关系**：不合并。Kyubey 里放的是 App 的 Firebase 推送凭据，只能由维护者运营；GriefSeed 由每个用户部署到自己的账号。
 
 ## 待决定的问题
 
-1. T4 是否允许把 Cloudflare API token 放在手机上（只限个人自用），还是只走 T5 的 Worker。token 泄露的后果是别人可以消耗你的 TURN 额度。
-2. 两部手机的中继来源是各自手动配置，还是在配对时通过二维码或节点下发一份默认配置，用户再修改。
-3. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
+已决定（2026-11-11）：Cloudflare API token 不放手机；加节点时自动带上它的 TURN，也可以单独配对中继来源；
+GriefSeed 的来源 token 用 Worker 自带的管理页管理；Worker 版节点先只支持一个 owner。
+
+1. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
