@@ -40,6 +40,7 @@ wake-only WebSocket，只发 `{"protocol_version":1,"type":"sync_required"}`；o
 - [服务端 wire addendum](docs/server-wire-addendum.md)
 - [OpenAPI](openapi/openapi.yaml)
 - [跨端路线图](docs/roadmap.md)
+- [TURN 与节点解耦、Cloudflare TURN 与 Worker 版节点：目标与计划](docs/plan-turn-sources.md)
 - [0.4 发布说明：升级与回退](docs/release-0.4.md)
 - [0.4 三端联合测试计划](docs/plan-0.4-joint-test.md)
 - [三端 WebRTC 通话迁移计划（历史）](docs/plan-webrtc.md)
