@@ -75,7 +75,8 @@ README 放“Deploy to Cloudflare”按钮。SoulGem 自带 coturn，GriefSeed �
 分两个阶段：
 
 - **G3a 自带的 Cloudflare TURN**（小，先做）：实现中继来源协议，Cloudflare TURN key 和 API token 作为 Worker secret 保存，
-  按用户 token 发放凭据。这样可以把 Cloudflare TURN 分享给别人，而不用把 API token 交给他们的手机。
+  按用户 token 发放凭据。T5 起用部署级 SQLite Durable Object 保存 token、签发记录和撤销任务；T6 单 owner 节点复用该对象及 schema。
+  吊销 token 后拒绝新签发，并主动撤销其名下未过期的 username，失败任务持久化重试；已有中继的停止时间按实测描述。
 - **G3b Worker 版节点**（大，后做）：用 Durable Objects（SQLite）实现手机实际用到的 SoulGem 协议子集，
   让没有服务器的人可以把它当唯一节点，有服务器的人可以把它当冷备节点。
 
@@ -122,7 +123,7 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃；UDP 不通但 TLS 可用、长振铃及刷新超时通过 |
 | T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机加节点时自动把它加为来源，可单独关闭 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
 | T4 独立中继来源配对 | 手机支持扫 `gsm2sip://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
-| T5 GriefSeed 的 Cloudflare TURN（G3a） | GriefSeed：中继来源协议、D1 持久化 token 管理、吊销边界、Deploy 按钮、升级说明 | GriefSeed | 从按钮部署和升级后 token 状态可恢复；吊销后拒绝新签发；不需要命令行；按请求预算实测一天的用量 |
+| T5 GriefSeed 的 Cloudflare TURN（G3a） | GriefSeed：中继来源协议、SQLite DO 持久化 token 管理、主动撤销与竞态处理、Deploy 按钮、升级说明 | GriefSeed | 从按钮部署和升级后 token 状态可恢复；吊销后拒绝新签发并撤销名下未过期凭据，失败可恢复重试；记录新 Allocate 拒绝及已有中继的停止时间；不需要命令行；按请求预算实测一天的用量 |
 | T6 GriefSeed 节点本体（G3b） | 另起设计文档：协议子集、DO 数据模型、租约/恢复、冷备模式、请求预算；多 owner 前置端到端加密 | GriefSeed、Madoka、Homura | 先冻结设计与预算；实现后通过下述断线、租约和兼容验收 |
 
 T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 和 T5 一起开发、一起验收。
@@ -136,10 +137,20 @@ T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 �
 - **冷备与恢复**：主手机可暂停周期探测，但必须定义主节点失效后的激活触发、无推送时的恢复路径及激活后的同步顺序。
   DO 休眠/重启、alarm 延迟或重复触发不能延长已过期授权；在处理操作时检查持久化 deadline，而非只依赖 alarm。
   多主机抢接、续租中断超过 20 秒、网关信息超过 90 秒、断网重连、重复命令和旧端接入都属于 T6 必测场景。
+- **弱网重连：修正 Homura，并验证两端**。当前 Homura `GatewayService.onOpen` 在连接成功时立即重置退避；
+  Madoka `HostBackgroundService` 已在连接稳定 60 秒后才重置。Homura 改为稳定窗口达标后再重置，初始按 60 秒与 Madoka 对齐，
+  保留指数退避和 jitter；验证两端在快速断连、网络切换、令牌刷新后都不会绕过退避反复握手。
+  “全天每分钟重连一次约 1,440 次”仅是每设备、每节点的预算场景，在实施明确限频前不能称为上限；
+  每次握手的 Workers/DO 请求以及鉴权、补拉同步、SQLite 写入须单独计入。明确连接阶段限频不会替代活动通话的业务租约。
 - **请求预算**：现有主手机周期探测和通话轮询不能直接沿用。冷备 WebSocket、推送及控制传输优化是待验证方案，
   “每用户每天约一百次”只作为无通话、少量事件的冷备目标，不是保证或主节点容量指标。
-  分别计算 Workers 请求、DO 请求/消息、唤醒时长、D1/SQLite 读写、alarm、应用层续租、会话刷新、短信同步和重连风暴；
+  分别计算 Workers 请求、DO 请求/消息、唤醒时长、SQLite 读写、alarm、应用层续租、会话刷新、短信同步和重连风暴；
   分开实测冷备空闲、主节点空闲及通话场景。不得为凑预算放宽鉴权、租约或 durable ACK。
+- **额度防护边界**：Worker 可在访问 DO 前拒绝格式错误等部分无效请求；token 有效性与吊销状态由 DO 权威核验。
+  可选签名 token 能提前过滤伪造签名，但不能省掉吊销检查，也不能保证所有垃圾请求都不耗 DO 额度。
+  自定义域名/WAF、关闭不需要的直达入口及适用路由的 fail closed 降低风险，Worker 内限流本身不免请求计费。
+  T6 普通设备请求限额应返回 `Retry-After`，为挂断及蜂窝结束确认保留受限预算；平台总额度耗尽仍会阻断访问。
+  验收 1027、限流与弱网下的客户端退避和状态收敛，不把每日 1,440 次重连场景当作已实现的上限。
 - **先只支持一个 owner**（已决定）：一个部署只服务一个 owner，短信只存在自己的账号里。分享给别人时，T5 的 TURN token
   本来就支持多人；节点让每个人自己点一次部署。以后要支持多个 owner 时，必须先做旧手机和主手机之间的短信端到端加密，
   Worker 只转发密文。
