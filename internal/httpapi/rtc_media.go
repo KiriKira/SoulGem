@@ -429,6 +429,27 @@ func (s *Server) writeMediaAdmission(w http.ResponseWriter, b rtcsignal.Binding,
 	writeJSON(w, 200, map[string]any{"media_transport": "webrtc", "call_control": "rtc", "rtc_signaling": "https", "binding": b, "cellular_active": active, "ice_servers": servers})
 }
 
+// rtcIceServers issues credentials independently of any call, for the exact
+// authenticated device. Session and device revocation are checked by middleware.
+func (s *Server) rtcIceServers(w http.ResponseWriter, r *http.Request, p Principal) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !s.requireRTC(w) {
+		return
+	}
+	expiry := s.now().Add(time.Hour)
+	servers := []map[string]any{}
+	if len(s.rtc.options.STUNURLs) > 0 {
+		servers = append(servers, map[string]any{"urls": s.rtc.options.STUNURLs})
+	}
+	if len(s.rtc.options.TURNURLs) > 0 && s.rtc.options.TURNSecret != "" {
+		username := fmt.Sprintf("%d:%s", expiry.Unix(), p.DeviceID)
+		mac := hmac.New(sha1.New, []byte(s.rtc.options.TURNSecret))
+		_, _ = mac.Write([]byte(username))
+		servers = append(servers, map[string]any{"urls": s.rtc.options.TURNURLs, "username": username, "credential": base64.StdEncoding.EncodeToString(mac.Sum(nil))})
+	}
+	writeJSON(w, 200, map[string]any{"ice_servers": servers, "expires_at": time.Unix(expiry.Unix(), 0).UTC().Format(time.RFC3339)})
+}
+
 func (s *Server) rtcSignals(w http.ResponseWriter, r *http.Request, p Principal) {
 	if !s.requireRTC(w) {
 		return

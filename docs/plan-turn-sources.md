@@ -1,6 +1,6 @@
 # TURN 与节点解耦、Cloudflare 支持与 Worker 版节点：目标与计划
 
-更新：2026-11-12。状态：**目标已定，尚未实施**。本文是三端（SoulGem、Madoka、Homura）以及 Worker 版新仓库
+更新：2026-11-12。状态：**本批实现已完成，等待设备和真实 Cloudflare 验收**。详见 [实现与验收边界](turn-sources-implementation.md)。本文是三端（SoulGem、Madoka、Homura）以及 Worker 版新仓库
 [GriefSeed](https://github.com/KiriKira/GriefSeed) 共同遵守的目标文档；协议细节在对应里程碑实施时写进各自的协议文档。
 
 ## 背景

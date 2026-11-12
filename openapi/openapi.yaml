@@ -155,6 +155,33 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Capabilities'}
+  /rtc/ice-servers:
+    get:
+      operationId: getIceServers
+      description: Call-independent ICE servers for the authenticated device. Does not create or renew a call. Preserve configured URLs and ports.
+      responses:
+        '200':
+          description: ICE configuration with conservative expiry. Never cached by HTTP intermediaries.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ice_servers, expires_at]
+                properties:
+                  ice_servers:
+                    type: array
+                    items:
+                      type: object
+                      required: [urls]
+                      properties:
+                        urls: {type: array, items: {type: string}}
+                        username: {type: string}
+                        credential: {type: string}
+                  expires_at: {type: string, format: date-time}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {description: RTC or database unavailable.}
   /ws:
     get:
       servers:
@@ -1101,6 +1128,9 @@ components:
         global_decline_v1:
           type: boolean
           description: Gateways may declare global_decline; clients then see global_decline on incoming calls and may send decline_all.
+        ice_servers_v1:
+          type: boolean
+          description: Supports authenticated call-independent GET /rtc/ice-servers.
         incoming_ring_until_end:
           type: boolean
           description: Gateways may send remaining_ring_ms up to 300000 and end the call when the cellular call ends, so hosts ring until the caller or the network gives up.
