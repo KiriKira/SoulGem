@@ -165,3 +165,25 @@ T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 �
 GriefSeed 的来源 token 用 Worker 自带的管理页管理，T5 起采用版本化签名并由 DO 核验登记与吊销；Worker 版节点先只支持一个 owner。
 
 1. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
+
+## 后续事项（暂不排期）
+
+### IPv6（2026-11-14 记录，现有功能完成后再做）
+
+现状（按代码核对）：
+
+- **HTTPS 信令**：API 监听 `:8080`，Linux 上同时接受 IPv4/IPv6；前置的 Docker 端口映射、反向代理和安全组也要放行 IPv6。用 `curl -6 https://<域名>/v1/capabilities` 验证。
+- **内置 TURN 只支持 IPv4**：`deploy/allinone/turn-config.py` 写死 `listening-ip=0.0.0.0`、IPv4 `relay-ip`，下发的是 IPv4 字面量地址（不是域名），所以只给域名加 AAAA 不起作用。`deploy/turn` 同样只接受 IPv4。
+- **手机直连**：两端 WebRTC 没有禁用 IPv6，双方都有公网 IPv6 时可能已经直连成功，但从未实测；当前日志只有候选类型，看不出地址族。
+- **Cloudflare TURN**：下发域名 `turn.cloudflare.com`，大概率支持 IPv6，未核实。
+
+要做的事：
+
+1. 先确认直连：在通话统计里记录选中路径两端的地址族（v4/v6，不记录 IP），用两台真机在移动网络下实测。
+2. 自建 TURN 支持 IPv6（一体镜像和 `deploy/turn` 都要改）：
+   - coturn 同时监听 IPv4 和 IPv6，各配一个 `relay-ip`；需要能发现或配置服务器的 IPv6 地址。
+   - 下发地址：加 IPv6 字面量地址，或改为下发同时有 A/AAAA 的域名。
+   - **安全**：`denied-peer-ip` 补上 IPv4 映射地址 `::ffff:0:0/96` 和 NAT64 前缀 `64:ff9b::/96`，否则可绕过 IPv4 内网限制，把 TURN 当作访问服务器内网的跳板。
+   - 实测 coturn 在双栈下给 IPv6 客户端分配的中继地址族，以及 IPv6 客户端经 IPv4 中继到对端是否正常。
+   - 部署文档：推荐 host 网络；安全组放行 IPv6 的 TURN 监听端口和中继端口段。
+3. 验收：当前模拟器环境基本没有 IPv6，需要有 IPv6 的测试机加真机，或者单独搭建双栈的测试网络。
