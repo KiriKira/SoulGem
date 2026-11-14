@@ -44,8 +44,8 @@ TURN 变成手机上独立配置的“**中继来源**”，和信令节点是�
 - 添加方式（已决定）：
   - **添加节点时自动带上它的 TURN**：节点声明 `ice_servers_v1` 时，加节点就同时把它加为中继来源，复用这个节点的会话，
     不需要另外配对；用户可以单独关掉某个节点的中继。GriefSeed 作为节点时，自带的 TURN 就是 Cloudflare。
-  - **单独配对一个中继来源**：扫描来源生成的链接或二维码（暂定 `gsm2sip://relay?url=...&token=...`，和现有的
-    `gsm2sip://join` 同一种方式），不用手打。链接里含 token，只在来源的管理页上显示。
+  - **单独配对一个中继来源**：扫描来源生成的链接或二维码（暂定 `mahogsm://relay?url=...&token=...`，和现有的
+    `mahogsm://join` 同一种方式），不用手打。链接里含 token，只在来源的管理页上显示。
 - 两部手机**各自**维护自己的来源列表、各自选择。ICE 允许两侧使用不同的中继，所以旧手机可以用离自己近的 TURN，
   主手机用 Cloudflare。
 - 已有节点**不需要改配置**。新接口靠升级 SoulGem 版本获得，不改任何环境变量。
@@ -123,7 +123,7 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 | T1 来源抽象 | `rtcmedia` 里引入“中继来源”抽象，支持合并、去重、过滤和上限；先接入“节点下发”和“静态 TURN”；记录选中的来源 | Madoka、Homura | 单元测试覆盖合并规则；只配节点下发时行为与现在逐字节一致；自定义端口、同 URL 不同凭据及候选上限通过；KVM 模拟器里用静态 TURN、强制中继完成一次通话 |
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃；UDP 不通但 TLS 可用、长振铃及刷新超时通过 |
 | T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机加节点时自动把它加为来源，可单独关闭 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
-| T4 独立中继来源配对 | 手机支持扫 `gsm2sip://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
+| T4 独立中继来源配对 | 手机支持扫 `mahogsm://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
 | T5 GriefSeed 的 Cloudflare TURN（G3a） | GriefSeed：中继来源协议、版本化签名 token、SQLite DO 持久化 token 管理、主动撤销与竞态处理、Deploy 按钮、升级说明 | GriefSeed | 从按钮部署和升级后 token 状态及验签能力可恢复；伪造签名在 Worker 拒绝且不调用 DO，真实签名仍查 DO；吊销后拒绝新签发并撤销名下未过期凭据，失败可恢复重试；记录新 Allocate 拒绝及已有中继的停止时间；不需要命令行；按请求预算实测一天的用量 |
 | T6 GriefSeed 节点本体（G3b） | 另起设计文档：协议子集、DO 数据模型、租约/恢复、冷备模式、请求预算；多 owner 前置端到端加密 | GriefSeed、Madoka、Homura | 先冻结设计与预算；实现后通过下述断线、租约和兼容验收 |
 
