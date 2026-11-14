@@ -2,7 +2,7 @@
 
 测试时间：2026-11-13 12:00–17:45 UTC
 测试执行：Hermes（主助手）+ 2 个只读分析子代理（GriefSeed 可行性、allocation 泄漏根因）
-环境：AWS EC2 `18.119.113.237`（hostname `ip-172-31-8-41`，Ubuntu 24.04，2 vCPU / 7.7 GB，`/dev/kvm` 可用）
+环境：AWS EC2 `<lab-host>`（hostname `ip-172-31-8-41`，Ubuntu 24.04，2 vCPU / 7.7 GB，`/dev/kvm` 可用）
 
 ## 被测版本（实测开始的 HEAD）
 
@@ -31,12 +31,12 @@
 - Android 版本：GW = Android 16（API 36），H1 = Android 10（API 29）。
 - 宿主网络拓扑：
   ```
-  AWS EC2 172.31.8.41 / 公网 18.119.113.237
+  AWS EC2 <lab-host> / 公网 <lab-host>
    ├─ nodeA  soulgem-aio:turn  --network host  HTTP :8080  PG :55432  TURN :3478  relay 49160-49259  (内置 TURN 开)
    └─ nodeB  soulgem-aio:turn  --network host  HTTP :8082  PG :55434                        (BUILTIN_TURN_ENABLED=false)
-  emulator-5554/5556 → QEMU slirp → 10.0.2.2 / 172.31.8.41 → 宿主上的两个节点容器
+  emulator-5554/5556 → QEMU slirp → 10.0.2.2 / <lab-host> → 宿主上的两个节点容器
   ```
-  模拟器经 QEMU 用户态 NAT 出网，因此**只能访问宿主私网地址 172.31.8.41 或 10.0.2.2，访问不到节点公网 IP**。这直接决定了下面那条唯一的容器级改动。
+  模拟器经 QEMU 用户态 NAT 出网，因此**只能访问宿主私网地址 <lab-host> 或 10.0.2.2，访问不到节点公网 IP**。这直接决定了下面那条唯一的容器级改动。
 
 ## 测试容器的一处改动（已按要求限定范围，仓库默认配置未改）
 
@@ -45,7 +45,7 @@
 
 处理方式：**只在测试容器的 `/usr/local/libexec/gsm2sip-turn-config.py` 上挂载一份测试副本**
 (`/home/ubuntu/turn-acceptance/lab-turn-config.py`)，去掉 `10/8`、`172.16/12`、`192.168/16`、`127/8` 四条
-`denied-peer-ip`，并让广告地址使用宿主私网 `172.31.8.41`（`PUBLIC_IP`/`TURN_PUBLIC_IP`/`TURN_PRIVATE_IP`）。
+`denied-peer-ip`，并让广告地址使用宿主私网 `<lab-host>`（`PUBLIC_IP`/`TURN_PUBLIC_IP`/`TURN_PRIVATE_IP`）。
 仓库中的 `deploy/allinone/turn-config.py`、`entrypoint.sh` 与 `deploy/turn/compose.yaml` 一字未改。
 
 coturn 侧的原始拒绝证据：默认配置阶段强制中继候选始终拿不到 server-reflexive/relay 对，`candidate_types=host` 后直接 `ice_checking` 超时。
@@ -257,7 +257,7 @@ host 4339/4360 包、GW 4522/4505 包，通话正常结束。
 
 ### C2 当前节点 B（无内置 TURN）经 A 的 TURN（通过）
 
-拓扑：两端都配对 A、B；主机当前节点 = B（`active_node=http://172.31.8.41:8082/v1`）；
+拓扑：两端都配对 A、B；主机当前节点 = B（`active_node=http://<lab-host>:8082/v1`）；
 节点 B 容器内 `/run/gsm2sip/` 只有 `ports`，**没有 turn.conf**，确认无内置 TURN。
 
 结果：`selected_pair=relay/relay`，host 侧来源 `node-e02de8c0-…`、GW 侧 `node-b6a92ecf-…`
@@ -328,7 +328,7 @@ host 4339/4360 包、GW 4522/4505 包，通话正常结束。
 我用专用测试资源把 Worker 版节点真实部署上线，并验证到 ICE 签发这一层。
 
 **已建成的测试资源**（一次性、非生产）：
-- Worker：`https://griefseed.kiri-so.workers.dev`，Version ID `c1080832-4877-497f-bdd8-8ef6b9dc4514`
+- Worker：`https://<test-worker>`，Version ID `c1080832-4877-497f-bdd8-8ef6b9dc4514`
 - 源码：GriefSeed `codex/worker-turn-service` @ `f8b9c0a4de84f2a30fe88965c5f4b1c60117204d`（未改仓库，本地副本编译）
 - 构建：`tsc --noEmit` 通过；`wrangler deploy --dry-run` 通过；实际上传 869.30 KiB / gzip 104.64 KiB
 - Cloudflare TURN key：`griefseed-acceptance-2`（uid `2e302d84…`），专供本次验收
@@ -391,10 +391,10 @@ host 4339/4360 包、GW 4522/4505 包，通话正常结束。
 
 ## F1：GriefSeed Worker 作为独立 relay source（手机侧实测）
 
-**环境**：Worker `https://griefseed.kiri-so.workers.dev`（Version `c1080832`），
+**环境**：Worker `https://<test-worker>`（Version `c1080832`），
 Cloudflare TURN key `griefseed-acceptance-2`，来源 token 通过 `gsm2sip://relay?url=…&token=…`
-deep link 导入 host app。导入界面确认框显示 `griefseed.kiri-so.workers.dev`，点击“添加”后
-来源列表出现 `griefseed.kiri-so.workers.dev ON / 优先使用`，配置落盘 `shared_prefs/rtc-relay-sources.xml`（966 B，加密）。
+deep link 导入 host app。导入界面确认框显示 `<test-worker>`，点击“添加”后
+来源列表出现 `<test-worker> ON / 优先使用`，配置落盘 `shared_prefs/rtc-relay-sources.xml`（966 B，加密）。
 
 **凭据链验证（server 侧，通过）**：
 - `POST /admin/login` → 200；`POST /admin/tokens {name:…}` → 201，返回 `link` + `qr`
@@ -436,7 +436,7 @@ deep link 导入 host app。导入界面确认框显示 `griefseed.kiri-so.worke
 - **中继路径被真正选中**：两端 selected pair 各有 `relay` 一侧
 - gateway 的 `relay_sources` 是 Worker 来源的 UUID —— `RelayRepository.kt:84` 用
   `UUID.randomUUID()` 给 external 来源分配 id、`name=URI(base).host`，
-  该 UUID 就是 gateway 侧那条 `griefseed.kiri-so.workers.dev` 的内部 id
+  该 UUID 就是 gateway 侧那条 `<test-worker>` 的内部 id
   （`NativePeer.kt:235` 只在本地候选为 relay 时填该字段，取值为 `sourcesForUrl(url)` 的 source id 列表）
 - 双向媒体正常，非零包且两侧对称
 
