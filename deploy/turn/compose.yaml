@@ -12,6 +12,9 @@ services:
       TURN_LISTEN_PORT: ${TURN_LISTEN_PORT:-3478}
       TURN_RELAY_MIN_PORT: ${TURN_RELAY_MIN_PORT:-49160}
       TURN_RELAY_MAX_PORT: ${TURN_RELAY_MAX_PORT:-49259}
+      # Empty means use the validated, relay-range-aware entrypoint default.
+      TURN_USER_QUOTA: ${TURN_USER_QUOTA:-}
+      TURN_TOTAL_QUOTA: ${TURN_TOTAL_QUOTA:-}
       TURN_REALM: ${TURN_REALM:?set a stable realm}
     volumes:
       - ./entrypoint.sh:/etc/gsm2sip-turn-entrypoint.sh:ro
@@ -24,5 +27,5 @@ services:
     # The pinned turnserver binary carries cap_net_bind_service; retaining this
     # one capability also permits an explicitly configured port below 1024.
     cap_add: [NET_BIND_SERVICE]
-    security_opt: [no-new-privileges:true]
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped

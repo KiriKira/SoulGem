@@ -18,8 +18,8 @@ func TestIceSourceWithoutCallAndRevocation(t *testing.T) {
 	urls := []string{"turn:relay.example:49100?transport=udp", "turns:relay.example:5349?transport=tcp"}
 	api := NewWithOptions(db.db, nil, Options{RTC: RTCMediaOptions{TURNURLs: urls, TURNSecret: secret}})
 	t.Cleanup(api.ShutdownWebSockets)
-	for _, token := range []string{f.clientToken, f.gatewayToken} {
-		reply := requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", token, nil, "")
+	for _, peer := range []struct{ token, device string }{{f.clientToken, f.clientID}, {f.gatewayToken, f.gatewayID}} {
+		reply := requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", peer.token, nil, "")
 		requireStatus(t, reply, 200)
 		if reply.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal("credentials may be cached")
@@ -45,6 +45,10 @@ func TestIceSourceWithoutCallAndRevocation(t *testing.T) {
 		}
 		if !strings.HasPrefix(out.Servers[0].Username, fmt.Sprintf("%d:", out.Expiry.Unix())) {
 			t.Fatal("expiry mismatch")
+		}
+		_, quotaIdentity, _ := strings.Cut(out.Servers[0].Username, ":")
+		if quotaIdentity != peer.device {
+			t.Fatal("call-independent cached credentials must retain the authenticated device quota")
 		}
 	}
 	requireStatus(t, requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", "invalid", nil, ""), 401)
