@@ -1,0 +1,507 @@
+diff --git a/deploy/allinone/turn-config.py b/deploy/allinone/turn-config.py
+index 1ea4d26..f48c637 100644
+--- a/deploy/allinone/turn-config.py
++++ b/deploy/allinone/turn-config.py
+@@ -57,6 +57,12 @@ def public_address(private):
+           'For NAT without STUN access, reuse PUBLIC_IP or set TURN_PUBLIC_IP.', file=sys.stderr)
+     return private
+ 
++def positive_limit(name, default, maximum):
++    value = env.get(name) or str(default)
++    if not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > maximum:
++        raise ValueError(f'{name} must be in 1..{maximum}; zero disables quota protection')
++    return int(value)
++
+ def port(name, default):
+     value = env.get(name, str(default))
+     if not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > 65535:
+@@ -71,6 +77,12 @@ try:
+     maximum = port('TURN_RELAY_MAX_PORT', 49259)
+     if minimum > maximum or minimum <= listener <= maximum:
+         raise ValueError('TURN relay range must be ordered and exclude its listening port')
++    # Allocation budgets, not call counts: allow UDP/TCP, multiple interfaces
++    # and bounded overlap for device-cached source credentials. Defaults leave
++    # 20 ports spare in the standard 100-port range; this is not a capacity guarantee.
++    capacity = maximum - minimum + 1
++    total_quota = positive_limit('TURN_TOTAL_QUOTA', min(80, capacity), capacity)
++    user_quota = positive_limit('TURN_USER_QUOTA', min(16, total_quota), total_quota)
+     secret = env.get('RTC_TURN_SHARED_SECRET')
+     if not secret:
+         key = base64.b64decode(env['SECRETS_ENCRYPTION_KEY'], validate=True)
+@@ -86,7 +98,8 @@ try:
+         'relay-ip=' + private, 'min-port=' + str(minimum), 'max-port=' + str(maximum),
+         'realm=' + realm, 'use-auth-secret', 'static-auth-secret=' + secret,
+         'fingerprint', 'no-cli', 'no-tls', 'no-dtls', 'no-tcp-relay',
+-        'no-multicast-peers', 'user-quota=4', 'total-quota=64',
++        'no-multicast-peers', 'user-quota=' + str(user_quota),
++        'total-quota=' + str(total_quota),
+         'log-file=stdout', 'simple-log',
+     ]
+     if public != private:
+diff --git a/deploy/env.example b/deploy/env.example
+index a926d98..fe85381 100644
+--- a/deploy/env.example
++++ b/deploy/env.example
+@@ -41,3 +41,7 @@ TURN_REALM=
+ TURN_LISTEN_PORT=3478
+ TURN_RELAY_MIN_PORT=49160
+ TURN_RELAY_MAX_PORT=49259
++# Both supplied TURN deployments: allocation limits, NOT call limits. Zero is rejected.
++# Defaults are capped to the relay range (and user <= total) when not explicitly set.
++# TURN_USER_QUOTA=16
++# TURN_TOTAL_QUOTA=80
+diff --git a/deploy/turn/compose.yaml b/deploy/turn/compose.yaml
+index a50aa2e..51be6f1 100644
+--- a/deploy/turn/compose.yaml
++++ b/deploy/turn/compose.yaml
+@@ -12,6 +12,9 @@ services:
+       TURN_LISTEN_PORT: ${TURN_LISTEN_PORT:-3478}
+       TURN_RELAY_MIN_PORT: ${TURN_RELAY_MIN_PORT:-49160}
+       TURN_RELAY_MAX_PORT: ${TURN_RELAY_MAX_PORT:-49259}
++      # Empty means use the validated, relay-range-aware entrypoint default.
++      TURN_USER_QUOTA: ${TURN_USER_QUOTA:-}
++      TURN_TOTAL_QUOTA: ${TURN_TOTAL_QUOTA:-}
+       TURN_REALM: ${TURN_REALM:?set a stable realm}
+     volumes:
+       - ./entrypoint.sh:/etc/gsm2sip-turn-entrypoint.sh:ro
+@@ -24,5 +27,5 @@ services:
+     # The pinned turnserver binary carries cap_net_bind_service; retaining this
+     # one capability also permits an explicitly configured port below 1024.
+     cap_add: [NET_BIND_SERVICE]
+-    security_opt: [no-new-privileges:true]
++    security_opt: ["no-new-privileges:true"]
+     restart: unless-stopped
+diff --git a/deploy/turn/entrypoint.sh b/deploy/turn/entrypoint.sh
+index 213751c..143f495 100644
+--- a/deploy/turn/entrypoint.sh
++++ b/deploy/turn/entrypoint.sh
+@@ -30,6 +30,22 @@ port TURN_RELAY_MAX_PORT "$TURN_RELAY_MAX_PORT"
+ if [ "$TURN_LISTEN_PORT" -ge "$TURN_RELAY_MIN_PORT" ] && [ "$TURN_LISTEN_PORT" -le "$TURN_RELAY_MAX_PORT" ]; then
+     echo 'TURN listener must be outside the relay range' >&2; exit 2
+ fi
++# Match the all-in-one allocation budgets, including device-cached credentials.
++capacity=$((TURN_RELAY_MAX_PORT - TURN_RELAY_MIN_PORT + 1))
++total_default=80
++[ "$capacity" -ge "$total_default" ] || total_default=$capacity
++TURN_TOTAL_QUOTA=${TURN_TOTAL_QUOTA:-$total_default}
++limit() {
++    case "$2" in ''|0*|*[!0-9]*) echo "Invalid $1: expected quota 1..$3" >&2; exit 2;; esac
++    [ "${#2}" -le 5 ] && [ "$2" -le "$3" ] || {
++        echo "Invalid $1: expected quota 1..$3" >&2; exit 2;
++    }
++}
++limit TURN_TOTAL_QUOTA "$TURN_TOTAL_QUOTA" "$capacity"
++user_default=16
++[ "$TURN_TOTAL_QUOTA" -ge "$user_default" ] || user_default=$TURN_TOTAL_QUOTA
++TURN_USER_QUOTA=${TURN_USER_QUOTA:-$user_default}
++limit TURN_USER_QUOTA "$TURN_USER_QUOTA" "$TURN_TOTAL_QUOTA"
+ cat > /tmp/gsm2sip-turn.conf <<EOF
+ pidfile=/tmp/turnserver.pid
+ relay-threads=1
+@@ -48,8 +64,8 @@ no-tls
+ no-dtls
+ no-tcp-relay
+ no-multicast-peers
+-user-quota=4
+-total-quota=64
++user-quota=$TURN_USER_QUOTA
++total-quota=$TURN_TOTAL_QUOTA
+ denied-peer-ip=0.0.0.0-0.255.255.255
+ denied-peer-ip=10.0.0.0-10.255.255.255
+ denied-peer-ip=100.64.0.0-100.127.255.255
+diff --git a/docs/webrtc-audio.md b/docs/webrtc-audio.md
+index 738b7b8..c72136e 100644
+--- a/docs/webrtc-audio.md
++++ b/docs/webrtc-audio.md
+@@ -75,6 +75,38 @@ cd deploy/turn
+ docker compose --env-file ../.env up -d
+ ```
+ 
++## TURN allocation quotas
++
++Both supplied TURN entrypoints default to `TURN_USER_QUOTA=16` and
++`TURN_TOTAL_QUOTA=80`. Unset/empty values use defaults capped to the relay-port
++range (and user quota to total quota). Explicit values must be decimal integers
++in `1..65535`, with `user <= total <= relay-port count`; zero, signs, leading
++zeroes and line injection fail startup. These are **allocation counts, not call
++counts**. They do not disable coturn's resource limits.
++
++Admission credentials have the REST username
++`expiry:authenticated_device_id:call_id:attempt_id`. coturn removes the expiry
++before quota accounting: the host and gateway no longer share a quota, different
++media attempts are isolated, and retries/credential renewal of the same attempt
++retain their quota identity.
++
++`GET /v1/rtc/ice-servers` intentionally retains call-independent
++`expiry:authenticated_device_id` credentials for compatibility with source
++clients' credential caches. All calls and probes using that cached credential
++share the **device-wide** quota, but never the other endpoint's quota. Neither a
++fresh expiry nor a per-response nonce would isolate multiple calls reusing one
++cached credential. True per-attempt source isolation requires a coordinated API
++and client cache-key change; it is not provided by this server-only fix.
++
++The 16-allocation user default leaves room for multiple interfaces, UDP/TCP
++gathering and limited overlap of cached-source calls/probes. Both endpoints draw
++from the total quota. With the standard 100-port range, the total default leaves
++20 ports spare; allocations with extra port reservations, occupied host ports or
++small configured ranges can reduce actual capacity. These defaults are not a
++measured worst-case guarantee. Size the range and both quotas together for the
++deployment's peak; an external TURN deployment must configure its own quotas.
++No allocation lifetime or client close behavior is changed by this fix.
++
+ ## Authenticated adapter endpoints
+ 
+ All paths use the existing paired bearer session under `/v1`:
+@@ -104,6 +136,14 @@ selection, committed SDP operation types, ICE/DTLS state, audio gating,
+ packet/PCM counters and selected candidate types. The API records the same
+ call/leg IDs and authorized operations. SDP, credentials and DTMF digits are
+ not included in these diagnostics. UI displays the frozen media transport.
++After a non-duplicate committed signal `close`, the API also logs
++`RTC media close observed`, the actor role and `media_stage`:
++`before_cellular_active` or `after_cellular_active`. This only reports whether
++the gateway's cellular/audio activation was persisted. `ice_state=not_reported`
++is explicit: an SDP answer/negotiated phase is not proof of ICE connectivity,
++and the server cannot infer a TURN 486 or distinguish network failure from a
++user cancellation. Diagnose the network cause using peer/coturn logs. This
++observation does not cover closes caused only by authorization/lease expiry.
+ 
+ An emulator can prove real native encrypted media with synthetic PCM replacing
+ physical audio hardware, along with Telecom call events and application call
+diff --git a/internal/httpapi/ice_servers_test.go b/internal/httpapi/ice_servers_test.go
+index 29f95e7..5ae293c 100644
+--- a/internal/httpapi/ice_servers_test.go
++++ b/internal/httpapi/ice_servers_test.go
+@@ -18,8 +18,8 @@ func TestIceSourceWithoutCallAndRevocation(t *testing.T) {
+ 	urls := []string{"turn:relay.example:49100?transport=udp", "turns:relay.example:5349?transport=tcp"}
+ 	api := NewWithOptions(db.db, nil, Options{RTC: RTCMediaOptions{TURNURLs: urls, TURNSecret: secret}})
+ 	t.Cleanup(api.ShutdownWebSockets)
+-	for _, token := range []string{f.clientToken, f.gatewayToken} {
+-		reply := requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", token, nil, "")
++	for _, peer := range []struct{ token, device string }{{f.clientToken, f.clientID}, {f.gatewayToken, f.gatewayID}} {
++		reply := requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", peer.token, nil, "")
+ 		requireStatus(t, reply, 200)
+ 		if reply.Header().Get("Cache-Control") != "no-store" {
+ 			t.Fatal("credentials may be cached")
+@@ -46,6 +46,10 @@ func TestIceSourceWithoutCallAndRevocation(t *testing.T) {
+ 		if !strings.HasPrefix(out.Servers[0].Username, fmt.Sprintf("%d:", out.Expiry.Unix())) {
+ 			t.Fatal("expiry mismatch")
+ 		}
++		_, quotaIdentity, _ := strings.Cut(out.Servers[0].Username, ":")
++		if quotaIdentity != peer.device {
++			t.Fatal("call-independent cached credentials must retain the authenticated device quota")
++		}
+ 	}
+ 	requireStatus(t, requestJSON(t, api.Handler(), "GET", "/v1/rtc/ice-servers", "invalid", nil, ""), 401)
+ 	if _, err := db.db.Exec(`UPDATE devices SET state='revoked' WHERE id=$1`, f.clientID); err != nil {
+diff --git a/internal/httpapi/rtc_media.go b/internal/httpapi/rtc_media.go
+index 74e29ae..d40e89d 100644
+--- a/internal/httpapi/rtc_media.go
++++ b/internal/httpapi/rtc_media.go
+@@ -338,7 +338,7 @@ func (s *Server) selectRTCMedia(w http.ResponseWriter, r *http.Request, p Princi
+ 		return
+ 	}
+ 	s.logger.Info("call media selected", "call_id", callID, "media", "webrtc", "rtc_signaling", "https", "leg_id", b.LegID)
+-	s.writeMediaAdmission(w, b, false)
++	s.writeMediaAdmission(w, p, b, false)
+ }
+ 
+ func (s *Server) getRTCMedia(w http.ResponseWriter, r *http.Request, p Principal) {
+@@ -412,16 +412,19 @@ func (s *Server) getRTCMedia(w http.ResponseWriter, r *http.Request, p Principal
+ 		rtcError(w, rtcsignal.ErrClosed)
+ 		return
+ 	}
+-	s.writeMediaAdmission(w, b, active)
++	s.writeMediaAdmission(w, p, b, active)
+ }
+ 
+-func (s *Server) writeMediaAdmission(w http.ResponseWriter, b rtcsignal.Binding, active bool) {
++func (s *Server) writeMediaAdmission(w http.ResponseWriter, p Principal, b rtcsignal.Binding, active bool) {
++	w.Header().Set("Cache-Control", "no-store")
+ 	servers := []map[string]any{}
+ 	if len(s.rtc.options.STUNURLs) > 0 {
+ 		servers = append(servers, map[string]any{"urls": s.rtc.options.STUNURLs})
+ 	}
+ 	if len(s.rtc.options.TURNURLs) > 0 && s.rtc.options.TURNSecret != "" {
+-		username := fmt.Sprintf("%d:%s:%s", s.now().Add(time.Hour).Unix(), b.ClientID, b.CallID)
++		// coturn removes the timestamp before accounting user-quota. Each endpoint
++		// and media attempt needs its own identity, stable across admission retries.
++		username := fmt.Sprintf("%d:%s:%s:%s", s.now().Add(time.Hour).Unix(), p.DeviceID, b.CallID, b.AttemptID)
+ 		mac := hmac.New(sha1.New, []byte(s.rtc.options.TURNSecret))
+ 		_, _ = mac.Write([]byte(username))
+ 		servers = append(servers, map[string]any{"urls": s.rtc.options.TURNURLs, "username": username, "credential": base64.StdEncoding.EncodeToString(mac.Sum(nil))})
+@@ -431,6 +434,9 @@ func (s *Server) writeMediaAdmission(w http.ResponseWriter, b rtcsignal.Binding,
+ 
+ // rtcIceServers issues credentials independently of any call, for the exact
+ // authenticated device. Session and device revocation are checked by middleware.
++// Source clients cache these credentials across calls, so their user-quota is
++// device-wide (including overlapping gathering/probes), not per call. Changing
++// the timestamp or adding a per-response nonce cannot isolate a cached credential.
+ func (s *Server) rtcIceServers(w http.ResponseWriter, r *http.Request, p Principal) {
+ 	w.Header().Set("Cache-Control", "no-store")
+ 	if !s.requireRTC(w) {
+@@ -476,6 +482,20 @@ func (s *Server) rtcSignals(w http.ResponseWriter, r *http.Request, p Principal)
+ 		if command.Kind != rtcsignal.Candidate && command.Kind != rtcsignal.EndCandidates {
+ 			s.logger.Info("RTC signal committed", "call_id", command.CallID, "leg_id", legID, "media", "webrtc", "event", command.Kind, "duplicate", duplicate)
+ 		}
++		if command.Kind == rtcsignal.Close && !duplicate {
++			// The server cannot observe ICE or TURN error codes. Report only the
++			// persisted activation boundary, without inventing a network cause.
++			var active bool
++			if err := s.db.QueryRowContext(ctx, `SELECT cellular_active FROM rtc_media_sessions WHERE leg_id=$1`, legID).Scan(&active); err != nil {
++				s.logger.Warn("RTC media close diagnostics unavailable", "call_id", command.CallID, "leg_id", legID)
++			} else {
++				stage := "before_cellular_active"
++				if active {
++					stage = "after_cellular_active"
++				}
++				s.logger.Info("RTC media close observed", "call_id", command.CallID, "leg_id", legID, "attempt_id", command.AttemptID, "actor_role", p.Role, "media_stage", stage, "cellular_active", active, "ice_state", "not_reported")
++			}
++		}
+ 		writeJSON(w, 200, map[string]any{"ack": ack, "duplicate": duplicate})
+ 		return
+ 	}
+diff --git a/internal/httpapi/rtc_media_test.go b/internal/httpapi/rtc_media_test.go
+index 6928ecb..08994dd 100644
+--- a/internal/httpapi/rtc_media_test.go
++++ b/internal/httpapi/rtc_media_test.go
+@@ -1,8 +1,14 @@
+ package httpapi
+ 
+ import (
++	"bytes"
+ 	"context"
++	"crypto/hmac"
++	"crypto/sha1"
++	"encoding/base64"
+ 	"encoding/json"
++	"fmt"
++	"log/slog"
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"strings"
+@@ -20,6 +26,9 @@ type rtcHTTPState struct {
+ type rtcAdmission struct {
+ 	Binding        rtcsignal.Binding `json:"binding"`
+ 	MediaTransport string            `json:"media_transport"`
++	Servers        []struct {
++		Username string `json:"username"`
++	} `json:"ice_servers"`
+ }
+ 
+ func rtcFixture(t *testing.T, direction string) (*integrationDatabase, integrationFixture, *Server, string) {
+@@ -98,8 +107,89 @@ func rtcPost(t *testing.T, api *Server, token string, c rtcsignal.Command, statu
+ 	return reply
+ }
+ 
++func TestTURNAdmissionQuotaIdentitySeparatesEndpointsCallsAndAttempts(t *testing.T) {
++	now := time.Unix(1700000000, 0)
++	s := &Server{now: func() time.Time { return now }, rtc: &rtcMediaRuntime{options: RTCMediaOptions{
++		TURNURLs: []string{"turn:relay.example:3478?transport=udp"}, TURNSecret: "test-secret-not-production",
++	}}}
++	b := rtcsignal.Binding{ClientID: "client", GatewayID: "gateway", CallID: "call-one", AttemptID: "attempt-one"}
++	credential := func(device string) (string, string) {
++		t.Helper()
++		response := httptest.NewRecorder()
++		s.writeMediaAdmission(response, Principal{DeviceID: device}, b, false)
++		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
++			t.Fatal("admission credentials must not be HTTP-cached")
++		}
++		var body struct {
++			Servers []struct {
++				Username   string `json:"username"`
++				Credential string `json:"credential"`
++			} `json:"ice_servers"`
++		}
++		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
++			t.Fatal(err)
++		}
++		if len(body.Servers) != 1 {
++			t.Fatal("missing TURN server")
++		}
++		user, password := body.Servers[0].Username, body.Servers[0].Credential
++		expiry, identity, ok := strings.Cut(user, ":")
++		if !ok || expiry != fmt.Sprint(now.Add(time.Hour).Unix()) {
++			t.Fatal("invalid expiry")
++		}
++		mac := hmac.New(sha1.New, []byte(s.rtc.options.TURNSecret))
++		_, _ = mac.Write([]byte(user))
++		if password != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
++			t.Fatal("invalid REST HMAC")
++		}
++		return user, identity
++	}
++	client, clientID := credential(b.ClientID)
++	gateway, gatewayID := credential(b.GatewayID)
++	if client == gateway || clientID != "client:call-one:attempt-one" || gatewayID != "gateway:call-one:attempt-one" {
++		t.Fatal("quota identity must use the authenticated endpoint and media attempt")
++	}
++	if retry, _ := credential(b.ClientID); retry != client {
++		t.Fatal("idempotent admission retry changed credentials")
++	}
++	now = now.Add(time.Minute)
++	if renewed, renewedID := credential(b.ClientID); renewed == client || renewedID != clientID {
++		t.Fatal("credential renewal must not reset the quota identity")
++	}
++	b.CallID = "call-two"
++	if _, nextID := credential(b.ClientID); nextID == clientID {
++		t.Fatal("different calls share quota")
++	}
++	b.CallID, b.AttemptID = "call-one", "attempt-two"
++	if _, nextID := credential(b.ClientID); nextID == clientID {
++		t.Fatal("different media attempts share quota")
++	}
++}
++
++func TestRTCMediaCloseReportsPreActivationWithoutGuessingICE(t *testing.T) {
++	_, f, api, callID := rtcFixture(t, "outgoing")
++	var logs bytes.Buffer
++	api.logger = slog.New(slog.NewJSONHandler(&logs, nil))
++	rtcRegister(t, api, f.gatewayToken)
++	b := rtcSelect(t, api, f.clientToken, callID).Binding
++	host := rtcRead(t, api, f.clientToken, b.LegID, 200)
++	rtcPost(t, api, f.clientToken, rtcCommand(b, rtcsignal.Offer, host.State.Snapshot.Revision), 200)
++	gateway := rtcRead(t, api, f.gatewayToken, b.LegID, 200)
++	rtcPost(t, api, f.gatewayToken, rtcCommand(b, rtcsignal.Answer, gateway.State.Snapshot.Revision), 200)
++	closeCommand := rtcCommand(b, rtcsignal.Close, 0)
++	rtcPost(t, api, f.clientToken, closeCommand, 200)
++	rtcPost(t, api, f.clientToken, closeCommand, 200)
++	text := logs.String()
++	if strings.Count(text, `"msg":"RTC media close observed"`) != 1 ||
++		!strings.Contains(text, `"media_stage":"before_cellular_active"`) ||
++		!strings.Contains(text, `"ice_state":"not_reported"`) {
++		t.Fatal("missing or duplicated pre-activation close observation")
++	}
++}
++
+ func TestRTCMediaAdmissionIsExplicitBoundAndIdempotent(t *testing.T) {
+ 	database, f, api, callID := rtcFixture(t, "outgoing")
++	api.rtc.options = RTCMediaOptions{TURNURLs: []string{"turn:relay.example:3478"}, TURNSecret: "test-secret"}
+ 	reply := requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, "")
+ 	requireStatus(t, reply, 200)
+ 	if !strings.Contains(reply.Body.String(), `"media_transport":"pending"`) {
+@@ -114,6 +204,22 @@ func TestRTCMediaAdmissionIsExplicitBoundAndIdempotent(t *testing.T) {
+ 	if first.Binding != second.Binding || first.Binding.CallID != callID || first.Binding.ClientID != f.clientID || first.Binding.GatewayID != f.gatewayID {
+ 		t.Fatal("admission changed identity across retry")
+ 	}
++	reply = requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, "")
++	requireStatus(t, reply, 200)
++	var gateway rtcAdmission
++	if err := json.Unmarshal(reply.Body.Bytes(), &gateway); err != nil {
++		t.Fatal(err)
++	}
++	if len(first.Servers) != 1 || len(second.Servers) != 1 || len(gateway.Servers) != 1 {
++		t.Fatal("missing TURN credentials")
++	}
++	_, clientQuota, _ := strings.Cut(first.Servers[0].Username, ":")
++	_, retryQuota, _ := strings.Cut(second.Servers[0].Username, ":")
++	_, gatewayQuota, _ := strings.Cut(gateway.Servers[0].Username, ":")
++	if clientQuota != f.clientID+":"+callID+":"+first.Binding.AttemptID || retryQuota != clientQuota ||
++		gatewayQuota != f.gatewayID+":"+callID+":"+first.Binding.AttemptID {
++		t.Fatal("HTTP admission paths did not use their authenticated endpoint")
++	}
+ 	requireStatus(t, requestJSON(t, api.Handler(), "POST", "/v1/calls/"+callID+"/media", f.otherToken, map[string]string{"media_transport": "webrtc"}, ""), 403)
+ 	if _, err := database.db.Exec(`UPDATE call_sessions SET state='dialing' WHERE call_id=$1`, callID); err != nil {
+ 		t.Fatal(err)
+@@ -140,6 +246,8 @@ func TestRTCMediaCannotSelectANewEngineAfterDial(t *testing.T) {
+ }
+ func TestRTCMediaRelaysCommittedSDPAndSeparatesCellularActive(t *testing.T) {
+ 	database, f, api, callID := rtcFixture(t, "outgoing")
++	var logs bytes.Buffer
++	api.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+ 	rtcRegister(t, api, f.gatewayToken)
+ 	admission := rtcSelect(t, api, f.clientToken, callID)
+ 	b := admission.Binding
+@@ -178,6 +286,9 @@ func TestRTCMediaRelaysCommittedSDPAndSeparatesCellularActive(t *testing.T) {
+ 	}
+ 	closeCommand := rtcCommand(b, rtcsignal.Close, 0)
+ 	rtcPost(t, api, f.clientToken, closeCommand, 200)
++	if !strings.Contains(logs.String(), `"media_stage":"after_cellular_active"`) {
++		t.Fatal("active media close was misreported as pre-activation")
++	}
+ 	rtcPost(t, api, f.gatewayToken, rtcCommand(b, rtcsignal.Answer, host.State.Snapshot.Revision), 410)
+ 	requireStatus(t, requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, ""), 410)
+ }
+diff --git a/scripts/test_turn_config.py b/scripts/test_turn_config.py
+index ca958ef..6119502 100644
+--- a/scripts/test_turn_config.py
++++ b/scripts/test_turn_config.py
+@@ -1,10 +1,14 @@
+ #!/usr/bin/env python3
+ """Exercise the real shell entrypoint without opening a listener or logging secrets."""
++import contextlib
++import io
+ import os
+ from pathlib import Path
++import runpy
+ import subprocess
+ import tempfile
+ import unittest
++from unittest.mock import patch
+ 
+ ENTRY = Path(__file__).resolve().parents[1] / "deploy/turn/entrypoint.sh"
+ 
+@@ -23,7 +27,8 @@ class TurnConfigurationTest(unittest.TestCase):
+                        RTC_TURN_SHARED_SECRET="a"*64, TURN_PUBLIC_IP="203.0.113.1",
+                        TURN_PRIVATE_IP="192.0.2.1", TURN_REALM="turn.example.com",
+                        TURN_LISTEN_PORT="3478", TURN_RELAY_MIN_PORT="49160",
+-                       TURN_RELAY_MAX_PORT="49259")
++                       TURN_RELAY_MAX_PORT="49259", TURN_USER_QUOTA="",
++                       TURN_TOTAL_QUOTA="")
+             env.update(overrides)
+             result = subprocess.run(["/bin/sh", str(script)], env=env, capture_output=True)
+             return result.returncode, config.read_text() if config.exists() else ""
+@@ -51,5 +56,54 @@ class TurnConfigurationTest(unittest.TestCase):
+                 self.assertEqual(code, 2)
+                 self.assertEqual(config, "")
+ 
++    def test_quota_defaults_overrides_and_small_ranges(self):
++        for overrides, expected in [({}, (16, 80)),
++                ({"TURN_USER_QUOTA": "12", "TURN_TOTAL_QUOTA": "72"}, (12, 72)),
++                ({"TURN_TOTAL_QUOTA": "8"}, (8, 8)),
++                ({"TURN_RELAY_MAX_PORT": "49163"}, (4, 4)),
++                ({"TURN_RELAY_MIN_PORT": "1", "TURN_RELAY_MAX_PORT": "1"}, (1, 1))]:
++            with self.subTest(overrides=overrides):
++                code, config = self.render(**overrides)
++                self.assertEqual(code, 0)
++                self.assertIn(f"user-quota={expected[0]}\n", config)
++                self.assertIn(f"total-quota={expected[1]}\n", config)
++
++    def test_invalid_quota_never_written(self):
++        cases = [{name: value} for name in ("TURN_USER_QUOTA", "TURN_TOTAL_QUOTA")
++                 for value in ("0", "-1", "01", "+16", "65536", "9" * 200,
++                               "1.5", "16\n", "16\nno-auth")]
++        cases += [{"TURN_TOTAL_QUOTA": "101"}, {"TURN_USER_QUOTA": "81"},
++                  {"TURN_USER_QUOTA": "9", "TURN_TOTAL_QUOTA": "8"}]
++        for case in cases:
++            with self.subTest(case=case):
++                code, config = self.render(**case)
++                self.assertEqual(code, 2)
++                self.assertEqual(config, "")
++
++
++class AllInOneTurnConfigurationTest(TurnConfigurationTest):
++    """Use the real Python renderer, intercepting all writes and network lookup."""
++    def render(self, **overrides):
++        env = dict(RTC_TURN_SHARED_SECRET="a" * 64, TURN_PUBLIC_IP="203.0.113.1",
++                   TURN_PRIVATE_IP="192.0.2.1", TURN_REALM="turn.example.com")
++        env.update(overrides)
++        output = {}
++        script = ENTRY.parents[1] / "allinone/turn-config.py"
++        def record_write(path, text, *args, **kwargs):
++            output[path.name] = text
++            return len(text)
++        with patch.dict(os.environ, env, clear=True), \
++                patch("pathlib.Path.write_text", record_write), \
++                patch("socket.gethostbyname", side_effect=lambda host: host), \
++                patch("subprocess.run", side_effect=AssertionError("unexpected network discovery")), \
++                patch("os.umask"), contextlib.redirect_stderr(io.StringIO()):
++            try:
++                runpy.run_path(str(script))
++            except SystemExit as error:
++                code = error.code if isinstance(error.code, int) else 1
++                return code, output.get("turn.conf", "")
++        return 0, output["turn.conf"]
++
++
+ if __name__ == "__main__":
+     unittest.main()

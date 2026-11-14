@@ -1,0 +1,624 @@
+diff --git a/app/src/test/java/com/callagent/host/calls/RtcAudioSessionPreparationTest.kt b/app/src/test/java/com/callagent/host/calls/RtcAudioSessionPreparationTest.kt
+index 2ab95aa..917696d 100644
+--- a/app/src/test/java/com/callagent/host/calls/RtcAudioSessionPreparationTest.kt
++++ b/app/src/test/java/com/callagent/host/calls/RtcAudioSessionPreparationTest.kt
+@@ -47,6 +47,29 @@ class RtcAudioSessionPreparationTest {
+         assertEquals(emptyList<String>(), requests.toList())
+     }
+ 
++    // Regression cases authored for CI; not compiled or run in the repair workspace.
++    @Test fun closingAnUnusedSessionDoesNotSignalOnTheSharedLeg() {
++        val session = session {}
++        session.close()
++        assertTrue(session.awaitShutdown(5000))
++        assertTrue(session.isClosed)
++        assertEquals(emptyList<String>(), requests.toList())
++    }
++
++    @Test fun preparationFailureCallbackMayCloseWithoutSignalingOnTheSharedLeg() {
++        val failed = CountDownLatch(1)
++        lateinit var session: RtcAudioSession
++        session = session {
++            session.close()
++            failed.countDown()
++        }
++        session.prepare()
++        assertTrue("preparation without the native library must fail", failed.await(5, TimeUnit.SECONDS))
++        assertTrue(session.awaitShutdown(5000))
++        assertTrue(session.isClosed)
++        assertEquals(emptyList<String>(), requests.toList())
++    }
++
+     private fun waitClosed(session: RtcAudioSession): Boolean {
+         val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+         while (System.nanoTime() < until) { if (session.isClosed) return true; Thread.sleep(20) }
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/CloseableSlot.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/CloseableSlot.kt
+new file mode 100644
+index 0000000..5b60239
+--- /dev/null
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/CloseableSlot.kt
+@@ -0,0 +1,35 @@
++package com.callagent.rtcmedia
++
++/** Single resource whose publication and retirement share one lifecycle lock.
++ * Creation and native disposal must not hold that lock: either may block on callbacks. */
++internal class CloseableSlot<T : AutoCloseable> {
++    private val lock = Any()
++    @Volatile var isClosed: Boolean = false; private set
++    @Volatile private var value: T? = null
++
++    fun get(): T? = value
++
++    fun install(resource: T): Boolean {
++        val accepted = synchronized(lock) {
++            if (isClosed) false else {
++                check(value == null)
++                value = resource
++                true
++            }
++        }
++        if (!accepted) resource.close()
++        return accepted
++    }
++
++    /** Returns true only for the caller that retired the slot, even if disposal throws.
++     * The session must still cancel its timers, signaling worker and status in that case. */
++    fun close(): Boolean {
++        val retired = synchronized(lock) {
++            if (isClosed) return false
++            isClosed = true
++            value.also { value = null }
++        }
++        runCatching { retired?.close() }
++        return true
++    }
++}
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
+index 00e4ef7..4532116 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
+@@ -25,13 +25,16 @@ internal class NativePeer(
+     private val onFailure: (String) -> Unit,
+     forceRelay: Boolean = false,
+     private val relayOrigins: (String) -> Set<String> = { emptySet() },
+-    private val multipleSources:Boolean=false
++    private val multipleSources:Boolean=false,
++    private val onGatheringComplete:(Int)->Unit={}
+ ) : AutoCloseable {
+     private val closed = AtomicBoolean()
+     private val connected = CountDownLatch(1)
+     private val localCandidates = LocalIceQueue<IceCandidate>()
+     private val candidateBudget=CandidateBudget()
+     private val candidateCount = java.util.concurrent.atomic.AtomicInteger()
++    // Count native callbacks before trickle filtering; diagnostics concern actual gathering.
++    private val gatheredCandidateCount = java.util.concurrent.atomic.AtomicInteger()
+     val hasQueuedCandidates: Boolean get() = localCandidates.hasCandidates()
+     fun takeCandidates(): LocalIceQueue.Batch<IceCandidate> = localCandidates.drain()
+     private val lock = Any()
+@@ -110,8 +113,12 @@ internal class NativePeer(
+             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                 onEvent("gathering_${state.name.lowercase()}")
++                if (state == PeerConnection.IceGatheringState.COMPLETE && !closed.get()) {
++                    onGatheringComplete(gatheredCandidateCount.get())
++                }
+             }
+             override fun onIceCandidate(candidate: IceCandidate) {
++                gatheredCandidateCount.incrementAndGet()
+                 if(multipleSources && !candidateBudget.accept(candidate.sdp)){onEvent("local_candidate_filtered_budget");return}
+                 if (candidateCount.incrementAndGet()>128) { onFailure("local_candidate_budget"); return }
+                 if (!localCandidates.add(candidate)) onEvent("late_local_candidate_ignored")
+@@ -235,14 +242,18 @@ internal class NativePeer(
+             val relaySource = if (local?.members?.get("candidateType") == "relay") {
+                 (local.members["url"] as? String)?.let(relayOrigins)?.sorted()?.joinToString(",")?.ifEmpty { "unknown" } ?: "unknown"
+             } else if (local == null) "unknown" else "direct"
+-            onEvent("stats selected_pair=$selected relay_sources=$relaySource tx_packets=$tx rx_packets=$rx candidate_types=${types.joinToString(",")} pcm_capture=${pcm?.captureFrames?.get()?:0} pcm_decoded=${pcm?.decodedFrames?.get()?:0}")
++            onEvent("stats selected_pair=$selected relay_sources=$relaySource tx_packets=$tx rx_packets=$rx candidate_types=${types.joinToString(",")} pcm_capture=${pcm?.captureFrames?.get()?:0} pcm_decoded=${pcm?.decodedFrames?.get()?:0} pcm_overruns=${pcm?.overruns?.get()?:0} pcm_underruns=${pcm?.underruns?.get()?:0}")
+         }
+     }
+     override fun close(){
+         if(!closed.compareAndSet(false,true))return
+         synchronized(lock){
+             runCatching{controls?.unregisterObserver();controls?.close();controls?.dispose()};controls=null
+-            runCatching{peer.setAudioRecording(false);peer.setAudioPlayout(false);peer.close();peer.dispose()}
++            // A failed audio stop must not skip ICE/TURN/native disposal.
++            runCatching{peer.setAudioRecording(false)}
++            runCatching{peer.setAudioPlayout(false)}
++            runCatching{peer.close()}
++            runCatching{peer.dispose()}
+             runCatching{track.dispose()};runCatching{source.dispose()};runCatching{factory.dispose()};runCatching{module.release()}
+         }
+         scheduler.shutdownNow();pcm?.clear();onEvent("native_closed")
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
+index 07d37da..d795b75 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
+@@ -1,28 +1,37 @@
+ package com.callagent.rtcmedia
+ 
+ import java.nio.ByteBuffer
+-import java.util.concurrent.ArrayBlockingQueue
++import java.util.ArrayDeque
+ import java.util.concurrent.atomic.AtomicLong
+ 
+ /** Bounded mono PCM16 adapter. Cellular side supplies 20 ms at 8/16 kHz;
+  * WebRTC pulls/pushes 10 ms at 16 kHz. There is no microphone/speaker fallback. */
+ class PcmBridge {
+-    private val captured = ArrayBlockingQueue<ByteArray>(12)
++    // Twelve 10 ms blocks = 120 ms. Keep the latency bound; do not hide overruns.
++    private val captureLock = Any()
++    private val captured = ArrayDeque<ByteArray>(CAPTURE_BLOCKS)
+     private var pendingPlayout: ByteArray? = null
+     @Volatile var onDecodedFrame: ((ByteArray) -> Unit)? = null
+     val captureFrames = AtomicLong()
+     val decodedFrames = AtomicLong()
+     val underruns = AtomicLong()
++    /** Number of 10 ms blocks evicted under capture pressure, not 20 ms input frames.
++     * Explicit clear() teardown is not an overrun. New blocks are never dropped. */
+     val overruns = AtomicLong()
+ 
+     fun capture(frame: ByteArray, sampleRate: Int) {
+         require(sampleRate == 8000 || sampleRate == 16000)
+         require(frame.size == sampleRate / 50 * 2)
+         val pcm = if (sampleRate == 16000) frame else upsample(frame)
+-        for (offset in intArrayOf(0, 320)) {
+-            val block = pcm.copyOfRange(offset, offset + 320)
+-            if (!captured.offer(block)) {
+-                captured.poll(); captured.offer(block); overruns.incrementAndGet()
++        val first = pcm.copyOfRange(0, 320)
++        val second = pcm.copyOfRange(320, 640)
++        synchronized(captureLock) {
++            for (block in arrayOf(first, second)) {
++                if (captured.size == CAPTURE_BLOCKS) {
++                    captured.removeFirst()
++                    overruns.incrementAndGet()
++                }
++                captured.addLast(block)
+             }
+         }
+     }
+@@ -30,7 +39,7 @@ class PcmBridge {
+     fun fill(buffer: ByteBuffer, format: Int, channels: Int, sampleRate: Int) {
+         require(format == 2 && channels == 1 && sampleRate == 16000 && buffer.capacity() == 320)
+         buffer.clear()
+-        val block = captured.poll()
++        val block = synchronized(captureLock) { captured.pollFirst() }
+         if (block == null) { underruns.incrementAndGet(); buffer.put(SILENCE) }
+         else { buffer.put(block); captureFrames.incrementAndGet() }
+         buffer.rewind()
+@@ -44,7 +53,10 @@ class PcmBridge {
+         else { pendingPlayout = null; onDecodedFrame?.invoke(previous + data) }
+     }
+ 
+-    @Synchronized fun clear() { captured.clear(); pendingPlayout = null; onDecodedFrame = null }
++    @Synchronized fun clear() {
++        synchronized(captureLock) { captured.clear() }
++        pendingPlayout = null; onDecodedFrame = null
++    }
+ 
+     private fun upsample(input: ByteArray): ByteArray {
+         val out = ByteArray(input.size * 2)
+@@ -59,5 +71,5 @@ class PcmBridge {
+     }
+     private fun sample(data: ByteArray, i: Int) = (data[i*2].toInt() and 255) or (data[i*2+1].toInt() shl 8)
+     private fun put(data: ByteArray, i: Int, value: Int) { data[i*2]=value.toByte();data[i*2+1]=(value shr 8).toByte() }
+-    private companion object { val SILENCE = ByteArray(320) }
++    private companion object { const val CAPTURE_BLOCKS = 12; val SILENCE = ByteArray(320) }
+ }
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt
+new file mode 100644
+index 0000000..8e5600b
+--- /dev/null
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt
+@@ -0,0 +1,34 @@
++package com.callagent.rtcmedia
++
++/** Configuration counts only: never retain or log URLs, credentials, tokens or source names.
++ * No candidates proves that relay ICE is unusable, not why a TURN transaction failed. */
++internal class RelayGatheringDiagnostics(
++    nodeServers: List<RelayIceServer>,
++    private val nodeEnabled: Boolean,
++    additionalSources: List<RelaySource>,
++    selection: RelaySelection
++) {
++    private val nodeSources = if (nodeServers.isEmpty()) 0 else 1
++    private val nodeServerCount = nodeServers.size
++    private val externalConfigured = additionalSources.size
++    private val externalEnabled = additionalSources.count { it.enabled }
++    private val externalSelected: Int
++    private val selectedTurnUrls: Int
++    init {
++        val selectedUrls = selection.servers.flatMap { it.urls }.toSet()
++        externalSelected = selectedUrls.flatMap { selection.sourcesForUrl(it) }
++            .filter { it != RelaySources.NODE_ID }.toSet().size
++        selectedTurnUrls = selectedUrls.count {
++            it.startsWith("turn:", ignoreCase = true) || it.startsWith("turns:", ignoreCase = true)
++        }
++    }
++
++    fun completed(forceRelay: Boolean, localCandidates: Int): String? {
++        if (!forceRelay || localCandidates != 0) return null
++        val reason = if (selectedTurnUrls == 0) "no_turn_servers_configured" else "turn_candidates_unavailable"
++        return "relay_no_local_candidates reason=$reason force_relay=true local_candidates=0" +
++            " external_sources_configured=$externalConfigured external_sources_enabled=$externalEnabled" +
++            " external_sources_selected=$externalSelected node_sources_configured=$nodeSources" +
++            " node_servers_configured=$nodeServerCount node_enabled=$nodeEnabled selected_turn_urls=$selectedTurnUrls"
++    }
++}
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
+index 6e4c9c3..1d18e4d 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
+@@ -53,6 +53,7 @@ class RtcAudioSession(
+     }
+     private val nodeRelayPolicy=RelayRepository.nodePolicy(context,currentRelayNodeId)
+     private val relaySelection=RelaySources.selectForCall(if(nodeRelayPolicy.first)nodeServers else emptyList(),additionalRelaySources,RelayRepository.cachedRank(context,nodeServers),nodeRelayPolicy.second).let(TurnCredentials::resolve)
++    private val relayDiagnostics=RelayGatheringDiagnostics(nodeServers,nodeRelayPolicy.first,additionalRelaySources,relaySelection)
+     private val servers = relaySelection.servers.map { item ->
+         PeerConnection.IceServer.builder(item.urls).apply {
+             item.username?.let(::setUsername)
+@@ -60,14 +61,14 @@ class RtcAudioSession(
+         }.createIceServer()
+     }
+     private val worker=Executors.newSingleThreadScheduledExecutor { task -> Thread(task,"RTC-Signal-${callId.take(8)}") }
+-    private val closed=AtomicBoolean()
++    private val peerSlot=CloseableSlot<NativePeer>()
+     private val started=AtomicBoolean()
+     private val failed=AtomicBoolean()
+     private val connectionLatch=CountDownLatch(1)
+-    @Volatile private var peer:NativePeer?=null
++    private val peer:NativePeer? get()=peerSlot.get()
+     @Volatile var isConnected=false;private set
+     @Volatile var cellularActive=false;private set
+-    val isClosed: Boolean get() = closed.get()
++    val isClosed: Boolean get() = peerSlot.isClosed
+     private var descriptionApplied=false
+     private var readyReported=false
+     private var revision=1L
+@@ -111,9 +112,14 @@ class RtcAudioSession(
+         relaySelection.fallbackReason?.let{event("relay_sources_fallback reason=$it")}
+         worker.execute {
+             try {
+-                if(closed.get())return@execute
+-                val native=NativePeer(context,callId,servers,pcm,::event,onDigit,{ reason -> runCatching { worker.execute { fail(reason) } }; Unit },forceRelay,relaySelection::sourcesForUrl,relaySelection.hasAdditionalSources)
+-                if(closed.get()){native.close();return@execute};peer=native
++                if(peerSlot.isClosed)return@execute
++                val native=NativePeer(context,callId,servers,pcm,::event,onDigit,
++                    { reason -> runCatching { worker.execute { fail(reason) } }; Unit },
++                    forceRelay,relaySelection::sourcesForUrl,relaySelection.hasAdditionalSources,
++                    onGatheringComplete={ count ->
++                        if(!peerSlot.isClosed)relayDiagnostics.completed(forceRelay,count)?.let(::event)
++                    })
++                if(!peerSlot.install(native))return@execute
+                 native.mute(desiredMute);native.enableAudio(desiredAudio)
+                 event("native_ready elapsed_ms=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-preparedAt)}")
+                 if(!gateway){
+@@ -130,7 +136,7 @@ class RtcAudioSession(
+         prepare()
+         worker.execute {
+             try {
+-                if(closed.get() || failed.get())return@execute
++                if(peerSlot.isClosed || failed.get())return@execute
+                 checkNotNull(peer)
+                 startedAt=System.nanoTime()
+                 if(!gateway){
+@@ -139,12 +145,12 @@ class RtcAudioSession(
+                     pendingOffer=null
+                     event("offer_sent prepared_ms=${TimeUnit.NANOSECONDS.toMillis(startedAt-preparedAt)}")
+                 }
+-                if(!closed.get())worker.scheduleWithFixedDelay(::poll,0,250,TimeUnit.MILLISECONDS)
++                if(!peerSlot.isClosed)worker.scheduleWithFixedDelay(::poll,0,250,TimeUnit.MILLISECONDS)
+             }catch(_:Throwable){fail("native_or_offer_setup_failed")}
+         }
+     }
+     private fun poll() {
+-        if(closed.get())return
++        if(peerSlot.isClosed)return
+         val now=System.nanoTime()
+         // A host's call is up only once the gateway reports cellular audio,
+         // so keep polling briskly until then.
+@@ -255,13 +261,13 @@ class RtcAudioSession(
+             }
+         }
+     }
+-    fun awaitConnected(timeoutMillis:Long):Boolean = connectionLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && peer?.isConnected==true && !closed.get()
+-    fun enableAudio(enabled:Boolean){desiredAudio=enabled;if(!closed.get())peer?.enableAudio(enabled)}
+-    fun mute(muted:Boolean){desiredMute=muted;if(!closed.get())peer?.mute(muted)}
+-    fun sendDtmf(digits:String){check(!closed.get());checkNotNull(peer).sendDtmf(digits)}
++    fun awaitConnected(timeoutMillis:Long):Boolean = connectionLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && peer?.isConnected==true && !peerSlot.isClosed
++    fun enableAudio(enabled:Boolean){desiredAudio=enabled;if(!peerSlot.isClosed)peer?.enableAudio(enabled)}
++    fun mute(muted:Boolean){desiredMute=muted;if(!peerSlot.isClosed)peer?.mute(muted)}
++    fun sendDtmf(digits:String){check(!peerSlot.isClosed);checkNotNull(peer).sendDtmf(digits)}
+     fun markCellularActive(){
+         worker.execute {
+-            if(closed.get())return@execute
++            if(peerSlot.isClosed)return@execute
+             try {api.request("POST","/calls/$callId/media/active",JSONObject().put("leg_id",legId));cellularActive=true;event("cellular_active")}
+             catch(_:Throwable){fail("cellular_authority_update_failed")}
+         }
+@@ -272,23 +278,24 @@ class RtcAudioSession(
+         Log.i("GsmRtc",line);onLog(line)
+     }
+     private fun fail(reason:String){
+-        if(closed.get() || !failed.compareAndSet(false,true))return
+-        event("failed reason=$reason");connectionLatch.countDown()
+-        // Fail closed even if the app callback itself throws.
++        if(peerSlot.isClosed || !failed.compareAndSet(false,true))return
++        connectionLatch.countDown()
++        // Fail closed even if a logging or app callback itself throws.
+         // Nothing was signaled before start, so a failed preparation leaves
+         // the leg for a fresh session to use.
+-        try{onFailure(reason)}finally{close(notifyPeer = started.get())}
++        try{event("failed reason=$reason");onFailure(reason)}finally{close(notifyPeer = started.get())}
+     }
+     fun awaitShutdown(timeoutMillis:Long):Boolean = worker.awaitTermination(timeoutMillis,TimeUnit.MILLISECONDS)
+-    override fun close() = close(notifyPeer = true)
++    // A ringing preparation has not signaled and must not close the shared leg.
++    override fun close() = close(notifyPeer = started.get())
+ 
+     /** Drops local media without signaling: for a preparation that was never
+      * started, whose leg another session or the call's end owns. */
+     fun discard() = close(notifyPeer = false)
+ 
+     private fun close(notifyPeer:Boolean){
+-        if(!closed.compareAndSet(false,true))return
+-        connectionLatch.countDown();peer?.close();peer=null;RelayStatus.clear(callId)
++        if(!peerSlot.close())return
++        connectionLatch.countDown();RelayStatus.clear(callId)
+         unusedExpiry?.cancel(false)
+         if(notifyPeer)runCatching{worker.execute {runCatching{send("close")}}}
+         worker.shutdown()
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/CloseableSlotTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/CloseableSlotTest.kt
+new file mode 100644
+index 0000000..cce2490
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/CloseableSlotTest.kt
+@@ -0,0 +1,84 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicInteger
++
++/** Regression tests authored for CI; not compiled or run in the toolchain-free repair workspace. */
++class CloseableSlotTest {
++    @Test fun closeAfterConstructionButBeforePublicationClosesLatePeerExactlyOnce() {
++        val slot = CloseableSlot<AutoCloseable>()
++        val created = CountDownLatch(1)
++        val publish = CountDownLatch(1)
++        val closes = AtomicInteger()
++        val worker = Executors.newSingleThreadExecutor()
++        try {
++            val installed = worker.submit<Boolean> {
++                val native = AutoCloseable { closes.incrementAndGet() }
++                // The resource already exists; publication is deliberately blocked.
++                created.countDown()
++                check(publish.await(5, TimeUnit.SECONDS))
++                slot.install(native)
++            }
++            assertTrue(created.await(5, TimeUnit.SECONDS))
++            assertTrue(slot.close())
++            assertTrue(slot.isClosed)
++            assertNull(slot.get())
++            assertEquals(0, closes.get())
++            publish.countDown()
++            assertFalse(installed.get(5, TimeUnit.SECONDS))
++            assertFalse(slot.close())
++            assertNull(slot.get())
++            assertEquals(1, closes.get())
++        } finally { publish.countDown(); worker.shutdownNow() }
++    }
++
++    @Test fun installedPeerIsDetachedAndClosedExactlyOnce() {
++        val slot = CloseableSlot<AutoCloseable>()
++        val closes = AtomicInteger()
++        val native = AutoCloseable {
++            assertTrue(slot.isClosed)
++            assertNull(slot.get())
++            closes.incrementAndGet()
++        }
++        assertTrue(slot.install(native))
++        assertSame(native, slot.get())
++        assertTrue(slot.close())
++        assertFalse(slot.close())
++        assertEquals(1, closes.get())
++    }
++
++    @Test fun blockedNativeDisposalDoesNotHoldLifecycleLock() {
++        val slot = CloseableSlot<AutoCloseable>()
++        val disposing = CountDownLatch(1)
++        val finish = CountDownLatch(1)
++        val closes = AtomicInteger()
++        val workers = Executors.newFixedThreadPool(2)
++        try {
++            assertTrue(slot.install(AutoCloseable {
++                disposing.countDown()
++                check(finish.await(5, TimeUnit.SECONDS))
++            }))
++            val closed = workers.submit<Boolean> { slot.close() }
++            assertTrue(disposing.await(5, TimeUnit.SECONDS))
++            // This install needs the lifecycle lock and must not wait for native.close().
++            val late = workers.submit<Boolean> { slot.install(AutoCloseable { closes.incrementAndGet() }) }
++            assertFalse(late.get(5, TimeUnit.SECONDS))
++            assertEquals(1, closes.get())
++            finish.countDown()
++            assertTrue(closed.get(5, TimeUnit.SECONDS))
++        } finally { finish.countDown(); workers.shutdownNow() }
++    }
++
++    @Test fun disposalFailureStillRetiresSlotAndLetsSessionFinishCleanup() {
++        val slot = CloseableSlot<AutoCloseable>()
++        assertTrue(slot.install(AutoCloseable { error("native close failure") }))
++        assertTrue(slot.close())
++        assertTrue(slot.isClosed)
++        assertNull(slot.get())
++        assertFalse(slot.close())
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt
+new file mode 100644
+index 0000000..92dddda
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt
+@@ -0,0 +1,87 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++import java.nio.ByteBuffer
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++
++/** Regression tests authored for CI; not compiled or run in the toolchain-free repair workspace. */
++class PcmBridgeTest {
++    @Test fun fullQueueEvictsTwoOldBlocksAndRetainsNewestAudioInOrder() {
++        val bridge = PcmBridge()
++        repeat(7) { index -> bridge.capture(frame(index * 2, index * 2 + 1), 16000) }
++        assertEquals(2L, bridge.overruns.get())
++        for (expected in 2 until 14) assertArrayEquals(block(expected), fill(bridge))
++        assertEquals(12L, bridge.captureFrames.get())
++        assertArrayEquals(ByteArray(320), fill(bridge))
++        assertEquals(1L, bridge.underruns.get())
++    }
++
++    @Test fun oneFreeSlotEvictsExactlyOneOldBlock() {
++        val bridge = PcmBridge()
++        repeat(6) { index -> bridge.capture(frame(index * 2, index * 2 + 1), 16000) }
++        assertArrayEquals(block(0), fill(bridge))
++        bridge.capture(frame(12, 13), 16000)
++        assertEquals(1L, bridge.overruns.get())
++        for (expected in 2 until 14) assertArrayEquals(block(expected), fill(bridge))
++        assertEquals(13L, bridge.captureFrames.get())
++    }
++
++    @Test fun eightKhzStillProducesTwoTenMsBlocksWithoutOverrun() {
++        val bridge = PcmBridge()
++        bridge.capture(ByteArray(320), 8000)
++        repeat(2) { assertArrayEquals(ByteArray(320), fill(bridge)) }
++        assertEquals(2L, bridge.captureFrames.get())
++        assertEquals(0L, bridge.overruns.get())
++        assertEquals(0L, bridge.underruns.get())
++    }
++
++    @Test fun concurrentProducersAndConsumerAccountForEveryBlock() {
++        val bridge = PcmBridge()
++        val producers = 4
++        val framesPerProducer = 1000
++        val start = CountDownLatch(1)
++        val workers = Executors.newFixedThreadPool(producers + 1)
++        try {
++            val writes = (0 until producers).map { producer ->
++                workers.submit {
++                    check(start.await(5, TimeUnit.SECONDS))
++                    repeat(framesPerProducer) { bridge.capture(frame(producer, producer), 16000) }
++                }
++            }
++            val reads = workers.submit {
++                check(start.await(5, TimeUnit.SECONDS))
++                val buffer = ByteBuffer.allocate(320)
++                repeat(producers * framesPerProducer * 2) { bridge.fill(buffer, 2, 1, 16000) }
++            }
++            start.countDown()
++            writes.forEach { it.get(10, TimeUnit.SECONDS) }
++            reads.get(10, TimeUnit.SECONDS)
++            // At most twelve blocks remain. Drain them before checking conservation.
++            repeat(12) { fill(bridge) }
++            val produced = producers.toLong() * framesPerProducer * 2
++            assertEquals(produced, bridge.captureFrames.get() + bridge.overruns.get())
++            assertEquals(producers.toLong() * framesPerProducer * 2 + 12,
++                bridge.captureFrames.get() + bridge.underruns.get())
++        } finally { start.countDown(); workers.shutdownNow() }
++    }
++
++    @Test fun explicitClearIsNotCountedAsCapturePressure() {
++        val bridge = PcmBridge()
++        bridge.capture(frame(1, 2), 16000)
++        bridge.clear()
++        assertEquals(0L, bridge.overruns.get())
++        assertArrayEquals(ByteArray(320), fill(bridge))
++        assertEquals(1L, bridge.underruns.get())
++    }
++
++    private fun block(value: Int) = ByteArray(320) { value.toByte() }
++    private fun frame(first: Int, second: Int) = block(first) + block(second)
++    private fun fill(bridge: PcmBridge): ByteArray {
++        val buffer = ByteBuffer.allocate(320)
++        bridge.fill(buffer, 2, 1, 16000)
++        return buffer.array()
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt
+new file mode 100644
+index 0000000..3f7ab8a
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt
+@@ -0,0 +1,65 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++
++/** Regression tests authored for CI; not compiled or run in the toolchain-free repair workspace. */
++class RelayGatheringDiagnosticsTest {
++    @Test fun forceRelayWithoutAnyTurnInputExplainsMissingConfiguration() {
++        val diagnostic = RelayGatheringDiagnostics(emptyList(), true, emptyList(), RelaySources.select(emptyList()))
++        val event = checkNotNull(diagnostic.completed(true, 0))
++        assertTrue(event.startsWith("relay_no_local_candidates reason=no_turn_servers_configured "))
++        assertTrue(event.contains("external_sources_configured=0 "))
++        assertTrue(event.contains("node_sources_configured=0 "))
++        assertTrue(event.contains("selected_turn_urls=0"))
++    }
++
++    @Test fun selectedTurnWithoutCandidatesReportsCountsAndNoSecrets() {
++        val node = listOf(RelayIceServer(listOf("stun:node.invalid:3478", "turn:node.invalid:3478"), "node-user", "node-secret"))
++        val external = listOf(RelaySource("private-source", listOf(
++            RelayIceServer(listOf("turns:external.invalid:443?transport=tcp"), "external-user", "external-secret")
++        )))
++        val diagnostic = RelayGatheringDiagnostics(node, true, external, RelaySources.select(node, external))
++        val event = checkNotNull(diagnostic.completed(true, 0))
++        assertTrue(event.contains("reason=turn_candidates_unavailable "))
++        assertTrue(event.contains("external_sources_configured=1 external_sources_enabled=1 external_sources_selected=1 "))
++        assertTrue(event.contains("node_sources_configured=1 node_servers_configured=1 node_enabled=true selected_turn_urls=2"))
++        for (secret in listOf("node.invalid", "external.invalid", "node-user", "node-secret", "external-user", "external-secret", "private-source")) {
++            assertFalse("diagnostics must redact $secret", event.contains(secret))
++        }
++    }
++
++    @Test fun configuredButDisabledSourcesAreNotReportedAsSelected() {
++        val node = listOf(RelayIceServer(listOf("turn:node.invalid:3478")))
++        val disabled = listOf(RelaySource("disabled", listOf(
++            RelayIceServer(listOf("turn:external.invalid:3478"), "user", "secret")
++        ), enabled = false))
++        val selection = RelaySources.select(emptyList(), disabled)
++        val event = checkNotNull(RelayGatheringDiagnostics(node, false, disabled, selection).completed(true, 0))
++        assertTrue(event.contains("reason=no_turn_servers_configured "))
++        assertTrue(event.contains("external_sources_configured=1 external_sources_enabled=0 external_sources_selected=0 "))
++        assertTrue(event.contains("node_enabled=false selected_turn_urls=0"))
++    }
++
++    @Test fun invalidExternalConfigurationIsDistinguishedFromNoExternalConfiguration() {
++        val invalid = listOf(RelaySource("bad", listOf(RelayIceServer(listOf("https://invalid.invalid")))))
++        val selection = RelaySources.selectForCall(emptyList(), invalid)
++        assertNotNull(selection.fallbackReason)
++        val event = checkNotNull(RelayGatheringDiagnostics(emptyList(), true, invalid, selection).completed(true, 0))
++        assertTrue(event.contains("external_sources_configured=1 external_sources_enabled=1 external_sources_selected=0 "))
++        assertTrue(event.contains("selected_turn_urls=0"))
++    }
++
++    @Test fun stunOnlyInputDoesNotCountAsTurnConfiguration() {
++        val node = listOf(RelayIceServer(listOf("stun:node.invalid:3478")))
++        val event = checkNotNull(RelayGatheringDiagnostics(node, true, emptyList(), RelaySources.select(node)).completed(true, 0))
++        assertTrue(event.contains("reason=no_turn_servers_configured "))
++        assertTrue(event.contains("selected_turn_urls=0"))
++    }
++
++    @Test fun ordinaryIceAndSuccessfulRelayGatheringDoNotWarn() {
++        val diagnostic = RelayGatheringDiagnostics(emptyList(), true, emptyList(), RelaySources.select(emptyList()))
++        assertNull(diagnostic.completed(false, 0))
++        assertNull(diagnostic.completed(true, 1))
++    }
++}

@@ -1,0 +1,954 @@
+diff --git a/app/src/test/java/com/callagent/gateway/bridge/RtcAudioSessionCloseOrderingTest.kt b/app/src/test/java/com/callagent/gateway/bridge/RtcAudioSessionCloseOrderingTest.kt
+index d644193..f75d66c 100644
+--- a/app/src/test/java/com/callagent/gateway/bridge/RtcAudioSessionCloseOrderingTest.kt
++++ b/app/src/test/java/com/callagent/gateway/bridge/RtcAudioSessionCloseOrderingTest.kt
+@@ -4,7 +4,6 @@ import com.callagent.rtcmedia.MediaApi
+ import com.callagent.rtcmedia.RtcAudioSession
+ import org.json.JSONArray
+ import org.json.JSONObject
+-import org.junit.Assert.assertEquals
+ import org.junit.Assert.assertTrue
+ import org.junit.Test
+ import org.junit.runner.RunWith
+@@ -54,7 +53,7 @@ class RtcAudioSessionCloseOrderingTest {
+         assertTrue("durable control end owns peer teardown", api.requests.isEmpty())
+     }
+ 
+-    @Test fun defaultCloseAttemptsSignalingOnceAndIsIdempotent() {
++    @Test fun preparedDefaultCloseDoesNotSignalAndIsIdempotent() {
+         val api = RecordingFailingApi()
+         val session = newSession(api)
+ 
+@@ -63,6 +62,6 @@ class RtcAudioSessionCloseOrderingTest {
+ 
+         assertTrue(session.isClosed)
+         assertTrue(session.awaitShutdown(2_000))
+-        assertEquals(listOf(Request("POST", "/rtc/legs/10000000-0000-4000-8000-000000000002")), api.requests.toList())
++        assertTrue("a prepared session has no signaling peer", api.requests.isEmpty())
+     }
+ }
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
+index 393bf3f..8f15789 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/NativePeer.kt
+@@ -25,7 +25,8 @@ internal class NativePeer(
+     private val onFailure: (String) -> Unit,
+     forceRelay: Boolean = false,
+     private val relayOrigins: (String) -> Set<String> = { emptySet() },
+-    private val multipleSources:Boolean=false
++    private val multipleSources:Boolean=false,
++    private val onGatheringComplete:(Int)->Unit={}
+ ) : AutoCloseable {
+     private val closed = AtomicBoolean()
+     private val connected = CountDownLatch(1)
+@@ -111,6 +112,7 @@ internal class NativePeer(
+             override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                 onEvent("gathering_${state.name.lowercase()}")
++                if(state==PeerConnection.IceGatheringState.COMPLETE && !closed.get())onGatheringComplete(candidateCount.get())
+             }
+             override fun onIceCandidate(candidate: IceCandidate) {
+                 if(multipleSources && !candidateBudget.accept(candidate.sdp)){onEvent("local_candidate_filtered_budget");return}
+@@ -247,7 +249,11 @@ internal class NativePeer(
+         if(!closed.compareAndSet(false,true))return
+         synchronized(lock){
+             controls.getAndSet(null)?.let{runCatching{it.unregisterObserver();it.close();it.dispose()}}
+-            runCatching{peer.setAudioRecording(false);peer.setAudioPlayout(false);peer.close();peer.dispose()}
++            // A failure disabling audio must not skip TURN/native disposal.
++            runCatching{peer.setAudioRecording(false)}
++            runCatching{peer.setAudioPlayout(false)}
++            runCatching{peer.close()}
++            runCatching{peer.dispose()}
+             runCatching{track.dispose()};runCatching{source.dispose()};runCatching{factory.dispose()};runCatching{module.release()}
+         }
+         scheduler.shutdownNow();pcm?.clear();onEvent("native_closed")
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
+index 07d37da..9de4baf 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/PcmBridge.kt
+@@ -1,28 +1,36 @@
+ package com.callagent.rtcmedia
+ 
+ import java.nio.ByteBuffer
+-import java.util.concurrent.ArrayBlockingQueue
++import java.util.ArrayDeque
+ import java.util.concurrent.atomic.AtomicLong
+ 
+ /** Bounded mono PCM16 adapter. Cellular side supplies 20 ms at 8/16 kHz;
+  * WebRTC pulls/pushes 10 ms at 16 kHz. There is no microphone/speaker fallback. */
+ class PcmBridge {
+-    private val captured = ArrayBlockingQueue<ByteArray>(12)
++    // Preserve the existing 12 x 10 ms = 120 ms latency bound. Overflow
++    // drops the oldest 10 ms block, never silently rejects a new block.
++    private val captureLock = Any()
++    private val captured = ArrayDeque<ByteArray>(12)
+     private var pendingPlayout: ByteArray? = null
+     @Volatile var onDecodedFrame: ((ByteArray) -> Unit)? = null
+     val captureFrames = AtomicLong()
+     val decodedFrames = AtomicLong()
+     val underruns = AtomicLong()
++    /** Number of 10 ms blocks actually discarded by capture overflow (not clear). */
+     val overruns = AtomicLong()
+ 
+     fun capture(frame: ByteArray, sampleRate: Int) {
+         require(sampleRate == 8000 || sampleRate == 16000)
+         require(frame.size == sampleRate / 50 * 2)
+         val pcm = if (sampleRate == 16000) frame else upsample(frame)
+-        for (offset in intArrayOf(0, 320)) {
+-            val block = pcm.copyOfRange(offset, offset + 320)
+-            if (!captured.offer(block)) {
+-                captured.poll(); captured.offer(block); overruns.incrementAndGet()
++        synchronized(captureLock) {
++            for (offset in intArrayOf(0, 320)) {
++                val block = pcm.copyOfRange(offset, offset + 320)
++                if (captured.size == 12) {
++                    captured.removeFirst()
++                    overruns.incrementAndGet()
++                }
++                captured.addLast(block)
+             }
+         }
+     }
+@@ -30,7 +38,7 @@ class PcmBridge {
+     fun fill(buffer: ByteBuffer, format: Int, channels: Int, sampleRate: Int) {
+         require(format == 2 && channels == 1 && sampleRate == 16000 && buffer.capacity() == 320)
+         buffer.clear()
+-        val block = captured.poll()
++        val block = synchronized(captureLock) { captured.pollFirst() }
+         if (block == null) { underruns.incrementAndGet(); buffer.put(SILENCE) }
+         else { buffer.put(block); captureFrames.incrementAndGet() }
+         buffer.rewind()
+@@ -44,7 +52,7 @@ class PcmBridge {
+         else { pendingPlayout = null; onDecodedFrame?.invoke(previous + data) }
+     }
+ 
+-    @Synchronized fun clear() { captured.clear(); pendingPlayout = null; onDecodedFrame = null }
++    @Synchronized fun clear() { synchronized(captureLock) { captured.clear() }; pendingPlayout = null; onDecodedFrame = null }
+ 
+     private fun upsample(input: ByteArray): ByteArray {
+         val out = ByteArray(input.size * 2)
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/PeerLifecycle.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/PeerLifecycle.kt
+new file mode 100644
+index 0000000..ff3ed9d
+--- /dev/null
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/PeerLifecycle.kt
+@@ -0,0 +1,43 @@
++package com.callagent.rtcmedia
++
++/** One monitor owns start, publication and terminal state. Never close native
++ * resources under this monitor: WebRTC close can wait for observer callbacks. */
++internal class PeerLifecycle<T : AutoCloseable>(
++    // Deterministic test barrier at the former check/publication race window.
++    private val beforePublish: () -> Unit = {}
++) {
++    private val lock = Any()
++    private var closed = false
++    private var started = false
++    private var peer: T? = null
++    val isClosed: Boolean get() = synchronized(lock) { closed }
++    val isStarted: Boolean get() = synchronized(lock) { started }
++    fun get(): T? = synchronized(lock) { peer }
++
++    fun start(): Boolean = synchronized(lock) {
++        if (closed) return@synchronized false
++        check(!started)
++        started = true
++        true
++    }
++
++    fun install(resource: T): Boolean {
++        val accepted = synchronized(lock) {
++            if (closed) false else {
++                check(peer == null)
++                beforePublish()
++                peer = resource
++                true
++            }
++        }
++        if (!accepted) resource.close()
++        return accepted
++    }
++
++    data class Retired<T>(val peer: T?, val notifyPeer: Boolean)
++    fun closeAndDetach(notifyPeer: Boolean): Retired<T>? = synchronized(lock) {
++        if (closed) return@synchronized null
++        closed = true
++        Retired(peer, notifyPeer && started).also { peer = null }
++    }
++}
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt
+new file mode 100644
+index 0000000..70de44f
+--- /dev/null
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/RelayGatheringDiagnostics.kt
+@@ -0,0 +1,33 @@
++package com.callagent.rtcmedia
++
++import java.util.concurrent.atomic.AtomicBoolean
++
++/** Configuration counts only: never render URLs, source tokens or credentials. */
++internal class RelayGatheringDiagnostics(
++    private val forceRelay: Boolean,
++    node: List<RelayIceServer>,
++    nodeEnabled: Boolean,
++    additional: List<RelaySource>,
++    selected: RelaySelection
++) {
++    private val reported = AtomicBoolean()
++    private val details: String
++    init {
++        val selectedUrls = selected.servers.flatMap { it.urls }.distinct()
++        val nodeTurnUrls = node.flatMap { it.urls }.filter(::isTurn).distinct()
++        val selectedTurnUrls = selectedUrls.filter(::isTurn)
++        val sources = selectedTurnUrls.flatMap { selected.sourcesForUrl(it) }.toSet()
++        details = "external_configured=${additional.isNotEmpty()} external_sources=${additional.size}" +
++            " external_enabled_sources=${additional.count { it.enabled }}" +
++            " node_enabled=$nodeEnabled node_sources=${if(nodeTurnUrls.isEmpty())0 else 1}" +
++            " node_servers=${node.size} node_turn_urls=${nodeTurnUrls.size}" +
++            " selected_sources=${sources.size} selected_turn_urls=${selectedTurnUrls.size}"
++    }
++    fun completed(localCandidates: Int): String? {
++        if (!forceRelay || localCandidates != 0 || !reported.compareAndSet(false, true)) return null
++        // Gathering proves absence of local candidates, NOT that credentials,
++        // connectivity or quota is the specific cause. Probe events refine it.
++        return "relay_no_local_candidates force_relay=true local_candidates=0 $details"
++    }
++    private fun isTurn(url: String) = url.startsWith("turn:") || url.startsWith("turns:")
++}
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
+index 78f4214..4afe5f4 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/RtcAudioSession.kt
+@@ -52,7 +52,8 @@ class RtcAudioSession(
+         }
+     }
+     private val nodeRelayPolicy=RelayRepository.nodePolicy(context,currentRelayNodeId)
+-    private val relaySelection=RelaySources.selectForCall(if(nodeRelayPolicy.first)nodeServers else emptyList(),additionalRelaySources,RelayRepository.cachedRank(context,nodeServers),nodeRelayPolicy.second).let(TurnCredentials::resolve)
++    private val relaySelection=RelaySources.selectForCall(if(nodeRelayPolicy.first)nodeServers else emptyList(),additionalRelaySources,RelayRepository.cachedRank(context,nodeServers),nodeRelayPolicy.second).let{TurnCredentials.resolve(it,onEvent=::event)}
++    private val relayDiagnostics=RelayGatheringDiagnostics(forceRelay,nodeServers,nodeRelayPolicy.first,additionalRelaySources,relaySelection)
+     private val servers = relaySelection.servers.map { item ->
+         PeerConnection.IceServer.builder(item.urls).apply {
+             item.username?.let(::setUsername)
+@@ -60,15 +61,14 @@ class RtcAudioSession(
+         }.createIceServer()
+     }
+     private val worker=Executors.newSingleThreadScheduledExecutor { task -> Thread(task,"RTC-Signal-${callId.take(8)}") }
+-    private val closed=AtomicBoolean()
+-    private val started=AtomicBoolean()
++    private val lifecycle=PeerLifecycle<NativePeer>()
+     private val failed=AtomicBoolean()
+     private val negotiationLatch=CountDownLatch(1)
+     private val connectionLatch=CountDownLatch(1)
+-    @Volatile private var peer:NativePeer?=null
++    private val peer:NativePeer? get()=lifecycle.get()
+     @Volatile var isConnected=false;private set
+     @Volatile var cellularActive=false;private set
+-    val isClosed: Boolean get() = closed.get()
++    val isClosed: Boolean get() = lifecycle.isClosed
+     private var descriptionApplied=false
+     private var readyReported=false
+     private var revision=1L
+@@ -92,16 +92,17 @@ class RtcAudioSession(
+         fun select(api:MediaApi,callId:String):JSONObject = api.request("POST","/calls/$callId/media",JSONObject().put("media_transport","webrtc"))
+     }
+     fun start() {
+-        check(started.compareAndSet(false,true))
++        if(!lifecycle.start())return
+         startedAt=System.nanoTime()
+         event("selected")
+         if(relaySelection.truncated)event("relay_sources_truncated")
+         relaySelection.fallbackReason?.let{event("relay_sources_fallback reason=$it")}
+-        worker.execute {
++        try { worker.execute {
+             try {
+-                if(closed.get())return@execute
+-                val native=NativePeer(context,callId,servers,pcm,::event,onDigit,{ reason -> runCatching { worker.execute { fail(reason) } }; Unit },forceRelay,relaySelection::sourcesForUrl,relaySelection.hasAdditionalSources)
+-                if(closed.get()){native.close();return@execute};peer=native
++                if(lifecycle.isClosed)return@execute
++                val native=NativePeer(context,callId,servers,pcm,::event,onDigit,{ reason -> runCatching { worker.execute { fail(reason) } }; Unit },forceRelay,relaySelection::sourcesForUrl,relaySelection.hasAdditionalSources,
++                    { count -> relayDiagnostics.completed(count)?.let(::event) })
++                if(!lifecycle.install(native))return@execute
+                 native.mute(desiredMute);native.enableAudio(desiredAudio)
+                 event("native_ready elapsed_ms=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-startedAt)}")
+                 if(!gateway){
+@@ -110,12 +111,15 @@ class RtcAudioSession(
+                     event("offer_created elapsed_ms=${TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-startedAt)}")
+                     send("offer",offer)
+                 }
+-                if(!closed.get())worker.scheduleWithFixedDelay(::poll,0,250,TimeUnit.MILLISECONDS)
++                if(!lifecycle.isClosed)worker.scheduleWithFixedDelay(::poll,0,250,TimeUnit.MILLISECONDS)
+             }catch(_:Throwable){fail("native_or_offer_setup_failed")}
++        } } catch(_:java.util.concurrent.RejectedExecutionException) {
++            // close() may win after start is marked but before task submission.
++            if(!lifecycle.isClosed)fail("native_or_offer_setup_failed")
+         }
+     }
+     private fun poll() {
+-        if(closed.get())return
++        if(lifecycle.isClosed)return
+         val now=System.nanoTime()
+         if(isConnected && outgoingIce.isEmpty() && peer?.hasQueuedCandidates!=true && localEndQueued && now-lastPoll<2_000_000_000L)return
+         lastPoll=now
+@@ -228,14 +232,14 @@ class RtcAudioSession(
+         }
+     }
+     /** Gateway answer SDP is durably acknowledged; cellular winner CAS may now run. */
+-    fun awaitNegotiated(timeoutMillis:Long):Boolean = negotiationLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && !closed.get()
+-    fun awaitConnected(timeoutMillis:Long):Boolean = connectionLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && peer?.isConnected==true && !closed.get()
+-    fun enableAudio(enabled:Boolean){desiredAudio=enabled;if(!closed.get())peer?.enableAudio(enabled)}
+-    fun mute(muted:Boolean){desiredMute=muted;if(!closed.get())peer?.mute(muted)}
+-    fun sendDtmf(digits:String){check(!closed.get());checkNotNull(peer).sendDtmf(digits)}
++    fun awaitNegotiated(timeoutMillis:Long):Boolean = negotiationLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && !lifecycle.isClosed
++    fun awaitConnected(timeoutMillis:Long):Boolean = connectionLatch.await(timeoutMillis,TimeUnit.MILLISECONDS) && peer?.isConnected==true && !lifecycle.isClosed
++    fun enableAudio(enabled:Boolean){desiredAudio=enabled;if(!lifecycle.isClosed)peer?.enableAudio(enabled)}
++    fun mute(muted:Boolean){desiredMute=muted;if(!lifecycle.isClosed)peer?.mute(muted)}
++    fun sendDtmf(digits:String){check(!lifecycle.isClosed);checkNotNull(peer).sendDtmf(digits)}
+     fun markCellularActive(){
+         worker.execute {
+-            if(closed.get())return@execute
++            if(lifecycle.isClosed)return@execute
+             try {api.request("POST","/calls/$callId/media/active",JSONObject().put("leg_id",legId));cellularActive=true;event("cellular_active")}
+             catch(_:Throwable){fail("cellular_authority_update_failed")}
+         }
+@@ -246,10 +250,10 @@ class RtcAudioSession(
+         Log.i("GsmRtc",line);onLog(line)
+     }
+     private fun fail(reason:String){
+-        if(closed.get() || !failed.compareAndSet(false,true))return
+-        event("failed reason=$reason");connectionLatch.countDown()
++        if(lifecycle.isClosed || !failed.compareAndSet(false,true))return
++        connectionLatch.countDown()
+         // Fail closed even if the app callback itself throws.
+-        try{onFailure(reason)}finally{close()}
++        try{event("failed reason=$reason");onFailure(reason)}finally{close()}
+     }
+     fun awaitShutdown(timeoutMillis:Long):Boolean = worker.awaitTermination(timeoutMillis,TimeUnit.MILLISECONDS)
+     /** Close local media after the durable call-control terminal has been queued.
+@@ -257,12 +261,13 @@ class RtcAudioSession(
+      * signaling close could make the peer observe media closure first. */
+     fun closeAfterControlEnd() = close(notifyPeer = false)
+ 
+-    override fun close() = close(notifyPeer = true)
++    // A prepared-but-never-started session has no signaling peer to notify.
++    override fun close() = close(notifyPeer = lifecycle.isStarted)
+ 
+     private fun close(notifyPeer:Boolean){
+-        if(!closed.compareAndSet(false,true))return
+-        connectionLatch.countDown();peer?.close();peer=null;RelayStatus.clear(callId)
+-        if(notifyPeer)runCatching{worker.execute {runCatching{send("close")}}}
++        val retired=lifecycle.closeAndDetach(notifyPeer)?:return
++        connectionLatch.countDown();runCatching{retired.peer?.close()};RelayStatus.clear(callId)
++        if(retired.notifyPeer)runCatching{worker.execute {runCatching{send("close")}}}
+         worker.shutdown()
+         event("closed")
+     }
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnCredentials.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnCredentials.kt
+index bdd8dca..0ab4a97 100644
+--- a/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnCredentials.kt
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnCredentials.kt
+@@ -12,8 +12,9 @@ import javax.net.ssl.SSLSocket
+ import javax.net.ssl.SSLSocketFactory
+ 
+ /** RFC 5389/5766 long-term credential check, used only for colliding TURN URLs.
+- * Allocate is authenticated; a successful allocation is immediately released.
+- * Neither the challenge nor credentials are logged. All socket work has a hard deadline. */
++ * Every authenticated Allocate has bounded, same-socket Refresh=0 cleanup,
++ * even after a lost reply. Release is best effort, not guaranteed.
++ * Diagnostics contain only phase/result/code, never credentials or URLs. */
+ object TurnCredentials {
+     private val random=SecureRandom()
+     private val watchdog=Executors.newSingleThreadScheduledExecutor { r->Thread(r,"TURN-Deadline").apply{isDaemon=true} }
+@@ -38,40 +39,130 @@ object TurnCredentials {
+             offset+=4+(size+3)/4*4
+         };return false
+     }
+-    fun valid(url:String,server:RelayIceServer,timeoutMs:Int=350):Boolean=try {
++    private val cache=TurnProbeCache()
++    private const val CLEANUP_MS=200L
++    private fun errorCode(fields:Map<Int,ByteArray>):Int? = fields[9]?.takeIf{it.size>=4}?.let{(it[2].toInt() and 7)*100+(it[3].toInt() and 255)}
++    private fun report(onEvent:(String)->Unit,phase:String,result:String,code:Int?=null) {
++        // Logging must never skip allocation cleanup. No URLs or exception messages.
++        runCatching{onEvent("turn_credential_probe phase=$phase result=$result"+(code?.let{" code=$it"}?:""))}
++    }
++    private fun cacheKey(url:String,user:String,password:String):String {
++        val digest=MessageDigest.getInstance("SHA-256")
++        for(value in listOf(url,user,password)) {
++            val bytes=value.toByteArray(Charsets.UTF_8)
++            digest.update(ByteBuffer.allocate(4).putInt(bytes.size).array());digest.update(bytes)
++        }
++        return digest.digest().joinToString(""){"%02x".format(it.toInt() and 255)}
++    }
++    fun valid(url:String,server:RelayIceServer,timeoutMs:Int=350,onEvent:(String)->Unit={}):Boolean {
+         val user=server.username;val password=server.credential
+-        if(user.isNullOrEmpty()||password.isNullOrEmpty())false else {
+-            val scheme=url.substringBefore(':');val uri=URI("$scheme://${url.substringAfter(':')}");val host=uri.host.removePrefix("[").removeSuffix("]");val port=if(uri.port>0)uri.port else if(scheme=="turns")5349 else 3478
++        if(user.isNullOrEmpty()||password.isNullOrEmpty()||timeoutMs<=0)return false
++        return try {
++            cache.check(cacheKey(url,user,password),timeoutMs.toLong()+CLEANUP_MS) {
++                probe(url,user,password,timeoutMs,onEvent)
++            }
++        } catch(_:InterruptedException) {
++            Thread.currentThread().interrupt();report(onEvent,"cache","interrupted");false
++        } catch(_:Exception) { report(onEvent,"cache","wait_failed");false }
++    }
++    private fun probe(url:String,user:String,password:String,timeoutMs:Int,onEvent:(String)->Unit):Boolean {
++        var phase="connect"
++        var socket:Socket?=null
++        var udp:DatagramSocket?=null
++        var stop:ScheduledFuture<*>?=null
++        val deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(timeoutMs.toLong())
++        // Keep the same socket alive for a separate, bounded cleanup budget.
++        val hardDeadline=deadline+TimeUnit.MILLISECONDS.toNanos(CLEANUP_MS)
++        try {
++            val scheme=url.substringBefore(':');require(scheme=="turn"||scheme=="turns")
++            val uri=URI("$scheme://${url.substringAfter(':')}")
++            val host=uri.host.removePrefix("[").removeSuffix("]")
++            val port=if(uri.port>0)uri.port else if(scheme=="turns")5349 else 3478
+             val tcp=scheme=="turns"||uri.rawQuery=="transport=tcp"
+-            val socket=if(tcp){if(scheme=="turns")SSLSocketFactory.getDefault().createSocket() else Socket()}else null
+-            val udp=if(tcp)null else DatagramSocket()
+-            val stop=watchdog.schedule({runCatching{socket?.close()};runCatching{udp?.close()}},timeoutMs.toLong(),TimeUnit.MILLISECONDS)
+-            try {
+-                socket?.apply{soTimeout=timeoutMs;connect(InetSocketAddress(host,port),timeoutMs);if(this is SSLSocket){sslParameters=sslParameters.apply{endpointIdentificationAlgorithm="HTTPS"};startHandshake()}}
+-                udp?.apply{soTimeout=timeoutMs;connect(InetSocketAddress(host,port))}
+-                fun exchange(bytes:ByteArray):ByteArray {
+-                    if(socket!=null){socket.getOutputStream().write(bytes);val input=DataInputStream(socket.getInputStream());val header=ByteArray(20);input.readFully(header);val size=ByteBuffer.wrap(header,2,2).short.toInt() and 65535;require(size<=8192);val body=ByteArray(size);input.readFully(body);return header+body}
+-                    udp!!.send(DatagramPacket(bytes,bytes.size));val reply=DatagramPacket(ByteArray(8212),8212);udp.receive(reply);return reply.data.copyOf(reply.length)
++            socket=if(tcp){if(scheme=="turns")SSLSocketFactory.getDefault().createSocket() else Socket()}else null
++            udp=if(tcp)null else DatagramSocket()
++            val streamSocket=socket;val datagramSocket=udp
++            stop=watchdog.schedule({runCatching{streamSocket?.close()};runCatching{datagramSocket?.close()}},maxOf(1,hardDeadline-System.nanoTime()),TimeUnit.NANOSECONDS)
++            fun remaining(end:Long):Int {
++                val nanos=end-System.nanoTime()
++                if(nanos<=0)throw SocketTimeoutException()
++                return TimeUnit.NANOSECONDS.toMillis(nanos).coerceIn(1,Int.MAX_VALUE.toLong()).toInt()
++            }
++            streamSocket?.apply {
++                soTimeout=remaining(deadline);connect(InetSocketAddress(host,port),remaining(deadline))
++                if(this is SSLSocket){sslParameters=sslParameters.apply{endpointIdentificationAlgorithm="HTTPS"};soTimeout=remaining(deadline);startHandshake()}
++            }
++            datagramSocket?.connect(InetSocketAddress(host,port))
++            fun exchange(bytes:ByteArray,id:ByteArray,end:Long):ByteArray {
++                remaining(end)
++                if(streamSocket!=null)streamSocket.getOutputStream().write(bytes)
++                else datagramSocket!!.send(DatagramPacket(bytes,bytes.size))
++                while(true) {
++                    val response=if(streamSocket!=null) {
++                        val input=DataInputStream(streamSocket.getInputStream())
++                        fun readFully(target:ByteArray) {
++                            var offset=0
++                            while(offset<target.size) {
++                                streamSocket.soTimeout=remaining(end)
++                                val count=input.read(target,offset,target.size-offset)
++                                check(count>0);offset+=count
++                            }
++                        }
++                        val header=ByteArray(20);readFully(header)
++                        val size=ByteBuffer.wrap(header,2,2).short.toInt() and 65535;require(size<=8192)
++                        val body=ByteArray(size);readFully(body);header+body
++                    } else {
++                        datagramSocket!!.soTimeout=remaining(end)
++                        val reply=DatagramPacket(ByteArray(8212),8212);datagramSocket.receive(reply)
++                        reply.data.copyOf(reply.length)
++                    }
++                    // A late Allocate response must not consume the Refresh reply.
++                    if(response.size>=20&&response.copyOfRange(8,20).contentEquals(id))return response
++                    remaining(end)
+                 }
+-                val id=ByteArray(12).also(random::nextBytes);val transport=attribute(0x19,byteArrayOf(17,0,0,0))
+-                val challenge=exchange(packet(3,id,transport));val fields=attributes(challenge,id)
+-                require(ByteBuffer.wrap(challenge,0,2).short.toInt()==0x113)
+-                val error=fields[9]?:error("challenge");require(error.size>=4&&error[2].toInt()==4&&error[3].toInt()==1)
+-                val realm=fields[0x14]?:error("realm");val nonce=fields[0x15]?:error("nonce");require(realm.size<=1024&&nonce.size<=2048)
+-                val key=MessageDigest.getInstance("MD5").digest(user.toByteArray()+byteArrayOf(58)+realm+byteArrayOf(58)+password.toByteArray())
+-                val auth=attribute(6,user.toByteArray())+attribute(0x14,realm)+attribute(0x15,nonce)
+-                val next=ByteArray(12).also(random::nextBytes);val allocated=exchange(packet(3,next,transport+auth,key));attributes(allocated,next)
++            }
++            phase="challenge"
++            val id=ByteArray(12).also(random::nextBytes);val transport=attribute(0x19,byteArrayOf(17,0,0,0))
++            val challenge=exchange(packet(3,id,transport),id,deadline);val fields=attributes(challenge,id)
++            if(ByteBuffer.wrap(challenge,0,2).short.toInt()!=0x113||errorCode(fields)!=401) {
++                report(onEvent,phase,"rejected",errorCode(fields));return false
++            }
++            val realm=fields[0x14]?:error("realm");val nonce=fields[0x15]?:error("nonce");require(realm.size<=1024&&nonce.size<=2048)
++            val key=MessageDigest.getInstance("MD5").digest(user.toByteArray()+byteArrayOf(58)+realm+byteArrayOf(58)+password.toByteArray())
++            val auth=attribute(6,user.toByteArray())+attribute(0x14,realm)+attribute(0x15,nonce)
++            phase="allocate"
++            try {
++                val next=ByteArray(12).also(random::nextBytes)
++                val allocated=exchange(packet(3,next,transport+auth,key),next,deadline)
++                val allocatedFields=attributes(allocated,next)
+                 val ok=ByteBuffer.wrap(allocated,0,2).short.toInt()==0x103&&integrity(allocated,key)
+-                if(ok)runCatching{val release=ByteArray(12).also(random::nextBytes);exchange(packet(4,release,attribute(0x0d,ByteArray(4))+auth,key))}
+-                ok
+-            }finally{stop.cancel(false);socket?.close();udp?.close()}
+-        }
+-    }catch(_:Exception){false}
++                report(onEvent,phase,if(ok)"ok" else "rejected",errorCode(allocatedFields))
++                return ok
++            } finally {
++                // Cancellation must not skip this bounded best effort. Restore the
++                // interrupted flag afterwards; do not cancel a shared cache future.
++                val interrupted=Thread.interrupted()
++                try {
++                    val cleanupDeadline=minOf(hardDeadline,System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(CLEANUP_MS))
++                    val release=ByteArray(12).also(random::nextBytes)
++                    val response=exchange(packet(4,release,attribute(0x0d,ByteArray(4))+auth,key),release,cleanupDeadline)
++                    val released=attributes(response,release)
++                    val ok=ByteBuffer.wrap(response,0,2).short.toInt()==0x104&&integrity(response,key)&&released[0x0d]?.contentEquals(ByteArray(4))==true
++                    report(onEvent,"release",if(ok)"ok" else "rejected",errorCode(released))
++                } catch(_:SocketTimeoutException) { report(onEvent,"release","timeout") }
++                  catch(_:Exception) { report(onEvent,"release","failed") }
++                finally { if(interrupted)Thread.currentThread().interrupt() }
++            }
++        } catch(_:SocketTimeoutException) { report(onEvent,phase,"timeout");return false }
++          catch(_:Exception) { report(onEvent,phase,"failed");return false }
++        finally { stop?.cancel(false);runCatching{socket?.close()};runCatching{udp?.close()} }
++    }
+ 
+     /** One native credential per URL. Exact duplicates were already merged.
+      * Only collisions perform network I/O, in parallel under a shared 1.2 s deadline.
++     * Success/failure results are cached for 30/5 seconds with single-flight.
+      * If no credential verifies, retain the first as an ordinary ICE fallback. */
+-    fun resolve(selection:RelaySelection,check:(String,RelayIceServer)->Boolean={url,server->valid(url,server)}):RelaySelection {
++    fun resolve(selection:RelaySelection,onEvent:(String)->Unit={},check:(String,RelayIceServer)->Boolean={url,server->valid(url,server,onEvent=onEvent)}):RelaySelection {
+         val options=linkedMapOf<String,MutableList<RelayIceServer>>()
+         selection.servers.forEach { s->s.urls.forEach{options.getOrPut(it){mutableListOf()}.add(s)} }
+         val collisions=options.filterValues{it.map{s->s.username to s.credential}.distinct().size>1}
+diff --git a/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnProbeCache.kt b/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnProbeCache.kt
+new file mode 100644
+index 0000000..990a473
+--- /dev/null
++++ b/rtcmedia/src/main/java/com/callagent/rtcmedia/TurnProbeCache.kt
+@@ -0,0 +1,52 @@
++package com.callagent.rtcmedia
++
++import java.util.concurrent.CompletableFuture
++import java.util.concurrent.TimeUnit
++
++/** Short-lived, bounded cache plus single-flight. Keys must be credential digests,
++ * never credentials. Network work and waits always run outside the monitor. */
++internal class TurnProbeCache(
++    private val clock: () -> Long = System::nanoTime,
++    private val successTtl: Long = TimeUnit.SECONDS.toNanos(30),
++    private val failureTtl: Long = TimeUnit.SECONDS.toNanos(5),
++    private val capacity: Int = 128
++) {
++    private data class Entry(val result: Boolean, val expiresAt: Long)
++    private val results = LinkedHashMap<String, Entry>()
++    private val pending = HashMap<String, CompletableFuture<Boolean>>()
++
++    fun check(key: String, waitMs: Long, probe: () -> Boolean): Boolean {
++        val future: CompletableFuture<Boolean>
++        val owner: Boolean
++        synchronized(this) {
++            results.entries.removeAll { clock() >= it.value.expiresAt }
++            results[key]?.let { return it.result }
++            val existing = pending[key]
++            if (existing != null) {
++                future = existing
++                owner = false
++            } else {
++                // Do not start unbounded allocations on saturation.
++                if (pending.size >= capacity) return false
++                future = CompletableFuture()
++                pending[key] = future
++                owner = true
++            }
++        }
++        if (!owner) return future.get(waitMs, TimeUnit.MILLISECONDS)
++        try {
++            val result = probe()
++            synchronized(this) {
++                if (results.size >= capacity) results.remove(results.keys.first())
++                results[key] = Entry(result, clock() + if (result) successTtl else failureTtl)
++            }
++            future.complete(result)
++            return result
++        } catch (failure: Throwable) {
++            future.completeExceptionally(failure)
++            throw failure
++        } finally {
++            synchronized(this) { pending.remove(key) }
++        }
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt
+new file mode 100644
+index 0000000..e1f0018
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/PcmBridgeTest.kt
+@@ -0,0 +1,53 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++import java.nio.ByteBuffer
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++
++class PcmBridgeTest {
++    private fun frame(value:Int)=ByteArray(640){value.toByte()}
++    private fun pull(bridge:PcmBridge):ByteArray {
++        val buffer=ByteBuffer.allocate(320)
++        bridge.fill(buffer,2,1,16000)
++        return buffer.array()
++    }
++    @Test fun overflowDropsExactlyTwoOldBlocksAndRetainsNewestTwelve() {
++        val bridge=PcmBridge()
++        repeat(7){bridge.capture(frame(it+1),16000)}
++        assertEquals(2L,bridge.overruns.get())
++        for(value in 2..7)repeat(2){assertArrayEquals(ByteArray(320){value.toByte()},pull(bridge))}
++        assertEquals(12L,bridge.captureFrames.get())
++        assertArrayEquals(ByteArray(320),pull(bridge))
++        assertEquals(1L,bridge.underruns.get())
++    }
++    @Test fun concurrentProducersAndConsumerConserveEveryTenMillisecondBlock() {
++        val bridge=PcmBridge()
++        val executor=Executors.newFixedThreadPool(3)
++        val go=CountDownLatch(1)
++        try {
++            val producers=(1..2).map{value->executor.submit {
++                check(go.await(2,TimeUnit.SECONDS))
++                repeat(1000){bridge.capture(frame(value),16000)}
++            }}
++            val consumer=executor.submit {
++                check(go.await(2,TimeUnit.SECONDS))
++                repeat(2000){pull(bridge)}
++            }
++            go.countDown()
++            producers.forEach{it.get(5,TimeUnit.SECONDS)}
++            consumer.get(5,TimeUnit.SECONDS)
++            // Drain up to the unchanged queue bound after all producers stop.
++            repeat(12){pull(bridge)}
++            assertEquals(4000L,bridge.captureFrames.get()+bridge.overruns.get())
++        } finally { go.countDown();executor.shutdownNow() }
++    }
++    @Test fun clearIsAnExplicitResetNotAnOverflow() {
++        val bridge=PcmBridge()
++        bridge.capture(frame(1),16000);bridge.clear()
++        assertArrayEquals(ByteArray(320),pull(bridge))
++        assertEquals(0L,bridge.overruns.get())
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/PeerLifecycleTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/PeerLifecycleTest.kt
+new file mode 100644
+index 0000000..b511c92
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/PeerLifecycleTest.kt
+@@ -0,0 +1,103 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicInteger
++
++class PeerLifecycleTest {
++    @Test fun closeBetweenConstructionAndPublicationClosesLatePeerExactlyOnce() {
++        val lifecycle=PeerLifecycle<AutoCloseable>()
++        assertTrue(lifecycle.start())
++        val constructed=CountDownLatch(1)
++        val publish=CountDownLatch(1)
++        val closes=AtomicInteger()
++        val worker=Executors.newSingleThreadExecutor()
++        try {
++            val installed=worker.submit<Boolean> {
++                val native=AutoCloseable { closes.incrementAndGet() }
++                // Deterministically stop after construction, before publication.
++                constructed.countDown()
++                check(publish.await(2,TimeUnit.SECONDS))
++                lifecycle.install(native)
++            }
++            assertTrue(constructed.await(2,TimeUnit.SECONDS))
++            val retired=checkNotNull(lifecycle.closeAndDetach(true))
++            assertNull(retired.peer)
++            assertTrue(retired.notifyPeer)
++            publish.countDown()
++            assertFalse(installed.get(2,TimeUnit.SECONDS))
++            assertNull(lifecycle.closeAndDetach(true))
++            assertNull(lifecycle.get())
++            assertEquals(1,closes.get())
++        } finally { publish.countDown();worker.shutdownNow() }
++    }
++
++    @Test fun closeCannotPassTheClosedCheckBeforePublication() {
++        val checked=CountDownLatch(1)
++        val publish=CountDownLatch(1)
++        val closeAttempted=CountDownLatch(1)
++        val closes=AtomicInteger()
++        val lifecycle=PeerLifecycle<AutoCloseable> {
++            checked.countDown()
++            check(publish.await(2,TimeUnit.SECONDS))
++        }
++        val executor=Executors.newFixedThreadPool(2)
++        try {
++            assertTrue(lifecycle.start())
++            val installed=executor.submit<Boolean>{lifecycle.install(AutoCloseable{closes.incrementAndGet()})}
++            assertTrue(checked.await(2,TimeUnit.SECONDS))
++            val closed=executor.submit<Boolean>{
++                closeAttempted.countDown()
++                val retired=checkNotNull(lifecycle.closeAndDetach(true))
++                retired.peer?.close()
++                retired.notifyPeer
++            }
++            assertTrue(closeAttempted.await(2,TimeUnit.SECONDS))
++            try {
++                closed.get(100,TimeUnit.MILLISECONDS)
++                fail("close passed the publication monitor before publication")
++            } catch(_:java.util.concurrent.TimeoutException) { /* expected: monitor held */ }
++            publish.countDown()
++            assertTrue(installed.get(2,TimeUnit.SECONDS))
++            assertTrue(closed.get(2,TimeUnit.SECONDS))
++            assertNull(lifecycle.get())
++            assertEquals(1,closes.get())
++        } finally { publish.countDown();executor.shutdownNow() }
++    }
++
++    @Test fun installedPeerIsDetachedBeforeNativeCloseWithoutHoldingMonitor() {
++        val lifecycle=PeerLifecycle<AutoCloseable>()
++        val worker=Executors.newSingleThreadExecutor()
++        var closes=0
++        try {
++            assertTrue(lifecycle.start())
++            val peer=AutoCloseable {
++                assertNull(worker.submit<AutoCloseable?> { lifecycle.get() }.get(2,TimeUnit.SECONDS))
++                closes++
++            }
++            assertTrue(lifecycle.install(peer))
++            val retired=checkNotNull(lifecycle.closeAndDetach(true))
++            assertSame(peer,retired.peer)
++            retired.peer!!.close()
++            assertNull(lifecycle.closeAndDetach(true))
++            assertEquals(1,closes)
++        } finally { worker.shutdownNow() }
++    }
++
++    @Test fun preparedSessionNeverNotifiesAndCannotBeStartedAfterClose() {
++        val lifecycle=PeerLifecycle<AutoCloseable>()
++        assertFalse(lifecycle.isStarted)
++        assertFalse(checkNotNull(lifecycle.closeAndDetach(true)).notifyPeer)
++        assertTrue(lifecycle.isClosed)
++        assertFalse(lifecycle.start())
++    }
++
++    @Test fun controlTerminalSuppressesNotificationEvenAfterStart() {
++        val lifecycle=PeerLifecycle<AutoCloseable>()
++        assertTrue(lifecycle.start())
++        assertFalse(checkNotNull(lifecycle.closeAndDetach(false)).notifyPeer)
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt
+new file mode 100644
+index 0000000..8e5dd4b
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/RelayGatheringDiagnosticsTest.kt
+@@ -0,0 +1,26 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class RelayGatheringDiagnosticsTest {
++    @Test fun relayOnlyEmptyGatheringReportsConfigurationCountsOnceWithoutSecrets() {
++        val node=listOf(RelayIceServer(listOf("turn:node:3478"),"node-user","node-secret"))
++        val extra=listOf(RelaySource("backup",listOf(RelayIceServer(listOf("turn:backup:3478"),"external-user","external-secret"))))
++        val diagnostics=RelayGatheringDiagnostics(true,node,true,extra,RelaySources.select(node,extra))
++        val event=checkNotNull(diagnostics.completed(0))
++        assertTrue(event.startsWith("relay_no_local_candidates "))
++        assertTrue(event.contains("external_configured=true external_sources=1 external_enabled_sources=1"))
++        assertTrue(event.contains("node_sources=1"))
++        assertTrue(event.contains("selected_sources=2 selected_turn_urls=2"))
++        for(secret in listOf("node-user","node-secret","external-user","external-secret","turn:"))assertFalse(event.contains(secret))
++        assertNull(diagnostics.completed(0))
++    }
++    @Test fun directPolicyOrNonemptyGatheringDoesNotWarn() {
++        val empty=RelaySources.select(emptyList())
++        assertNull(RelayGatheringDiagnostics(false,emptyList(),true,emptyList(),empty).completed(0))
++        assertNull(RelayGatheringDiagnostics(true,emptyList(),true,emptyList(),empty).completed(1))
++        val warning=checkNotNull(RelayGatheringDiagnostics(true,emptyList(),false,emptyList(),empty).completed(0))
++        assertTrue(warning.contains("selected_sources=0 selected_turn_urls=0"))
++    }
++}
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnCredentialsTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnCredentialsTest.kt
+index c258847..ac7415d 100644
+--- a/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnCredentialsTest.kt
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnCredentialsTest.kt
+@@ -13,7 +13,7 @@ class TurnCredentialsTest {
+             socket.soTimeout=2000
+             val worker=Executors.newSingleThreadExecutor()
+             val task=worker.submit {
+-                repeat(5) {
++                repeat(6) {
+                     val received=DatagramPacket(ByteArray(8192),8192);socket.receive(received)
+                     val data=received.data.copyOf(received.length);val id=data.copyOfRange(8,20)
+                     val fields=TurnCredentials.attributes(data,id)
+@@ -22,7 +22,7 @@ class TurnCredentialsTest {
+                     val response=when {
+                         username==null->TurnCredentials.packet(0x113,id,TurnCredentials.attribute(9,byteArrayOf(0,0,4,1))+TurnCredentials.attribute(0x14,"realm".toByteArray())+TurnCredentials.attribute(0x15,"nonce".toByteArray()))
+                         username=="bad"->TurnCredentials.packet(0x113,id,TurnCredentials.attribute(9,byteArrayOf(0,0,4,1)))
+-                        else->TurnCredentials.packet(if(type==4)0x104 else 0x103,id,TurnCredentials.attribute(0x0d,byteArrayOf(0,0,2,88)),MessageDigest.getInstance("MD5").digest("good:realm:secret".toByteArray()))
++                        else->TurnCredentials.packet(if(type==4)0x104 else 0x103,id,TurnCredentials.attribute(0x0d,if(type==4)ByteArray(4) else byteArrayOf(0,0,2,88)),MessageDigest.getInstance("MD5").digest("good:realm:secret".toByteArray()))
+                     }
+                     socket.send(DatagramPacket(response,response.size,received.socketAddress))
+                 }
+@@ -33,10 +33,96 @@ class TurnCredentialsTest {
+                 val chosen=TurnCredentials.resolve(selection)
+                 assertEquals("good",chosen.servers.single().username)
+                 RelaySources.requireNativeCompatible(chosen)
++                assertEquals("good",TurnCredentials.resolve(selection).servers.single().username)
+                 task.get(3,java.util.concurrent.TimeUnit.SECONDS)
+             }finally{worker.shutdownNow()}
+         }
+     }
++    private enum class ProbeReply { OK, DROP_ALLOCATE, MALFORMED_ALLOCATE, BAD_ALLOCATE_INTEGRITY, LATE_ALLOCATE, ALLOCATE_QUOTA, RELEASE_ERROR, BAD_RELEASE_INTEGRITY, DROP_RELEASE }
++
++    private fun probeScenario(mode:ProbeReply):Pair<Boolean,List<String>> {
++        val events=java.util.concurrent.CopyOnWriteArrayList<String>()
++        val username="probe_${mode.name}"
++        val key=MessageDigest.getInstance("MD5").digest("$username:realm:secret".toByteArray())
++        DatagramSocket(0,InetAddress.getLoopbackAddress()).use { socket ->
++            socket.soTimeout=2000
++            val worker=Executors.newSingleThreadExecutor()
++            val task=worker.submit {
++                fun receive():DatagramPacket=DatagramPacket(ByteArray(8192),8192).also(socket::receive)
++                fun send(bytes:ByteArray,target:SocketAddress) { socket.send(DatagramPacket(bytes,bytes.size,target)) }
++                val first=receive();val id=first.data.copyOfRange(8,20)
++                send(TurnCredentials.packet(0x113,id,
++                    TurnCredentials.attribute(9,byteArrayOf(0,0,4,1))+
++                    TurnCredentials.attribute(0x14,"realm".toByteArray())+
++                    TurnCredentials.attribute(0x15,"nonce".toByteArray())),first.socketAddress)
++                val allocate=receive();val allocateId=allocate.data.copyOfRange(8,20)
++                assertEquals(3,ByteBuffer.wrap(allocate.data,0,2).short.toInt())
++                val success=TurnCredentials.packet(0x103,allocateId,TurnCredentials.attribute(0x0d,byteArrayOf(0,0,2,88)),key)
++                when(mode) {
++                    ProbeReply.DROP_ALLOCATE,ProbeReply.LATE_ALLOCATE -> Unit
++                    ProbeReply.MALFORMED_ALLOCATE -> send(TurnCredentials.packet(0x103,allocateId,byteArrayOf(0)),allocate.socketAddress)
++                    ProbeReply.BAD_ALLOCATE_INTEGRITY -> send(TurnCredentials.packet(0x103,allocateId,ByteArray(0),ByteArray(16)),allocate.socketAddress)
++                    ProbeReply.ALLOCATE_QUOTA -> send(TurnCredentials.packet(0x113,allocateId,TurnCredentials.attribute(9,byteArrayOf(0,0,4,86)),key),allocate.socketAddress)
++                    else -> send(success,allocate.socketAddress)
++                }
++                val release=receive()
++                assertEquals("same socket/5-tuple must own cleanup",allocate.socketAddress,release.socketAddress)
++                val data=release.data.copyOf(release.length);val releaseId=data.copyOfRange(8,20)
++                val fields=TurnCredentials.attributes(data,releaseId)
++                assertEquals(4,ByteBuffer.wrap(data,0,2).short.toInt())
++                assertArrayEquals(ByteArray(4),fields[0x0d])
++                val auth=TurnCredentials.attribute(6,username.toByteArray())+
++                    TurnCredentials.attribute(0x14,"realm".toByteArray())+
++                    TurnCredentials.attribute(0x15,"nonce".toByteArray())
++                assertArrayEquals(TurnCredentials.packet(4,releaseId,TurnCredentials.attribute(0x0d,ByteArray(4))+auth,key),data)
++                if(mode==ProbeReply.LATE_ALLOCATE)send(success,release.socketAddress)
++                when(mode) {
++                    ProbeReply.DROP_RELEASE -> Unit
++                    ProbeReply.RELEASE_ERROR -> send(TurnCredentials.packet(0x114,releaseId,TurnCredentials.attribute(9,byteArrayOf(0,0,4,38)),key),release.socketAddress)
++                    else -> send(TurnCredentials.packet(0x104,releaseId,TurnCredentials.attribute(0x0d,ByteArray(4)),if(mode==ProbeReply.BAD_RELEASE_INTEGRITY)ByteArray(16) else key),release.socketAddress)
++                }
++            }
++            try {
++                val url="turn:127.0.0.1:${socket.localPort}?transport=udp"
++                val server=RelayIceServer(listOf(url),username,"secret")
++                val result=TurnCredentials.valid(url,server,300){events.add(it)}
++                task.get(3,java.util.concurrent.TimeUnit.SECONDS)
++                // A second call with the exact credentials must not probe again.
++                val beforeCacheRead=events.size
++                assertEquals(result,TurnCredentials.valid(url,server,300){events.add(it)})
++                assertEquals("cache hit must perform no new probe",beforeCacheRead,events.size)
++                assertFalse(events.any{it.contains(username)||it.contains("secret")||it.contains("turn:")})
++                return result to events.toList()
++            } finally { worker.shutdownNow() }
++        }
++    }
++
++    @Test fun lostMalformedAndUnauthenticatedAllocateRepliesStillReleaseOnSameSocket() {
++        for(mode in listOf(ProbeReply.DROP_ALLOCATE,ProbeReply.MALFORMED_ALLOCATE,ProbeReply.BAD_ALLOCATE_INTEGRITY,ProbeReply.LATE_ALLOCATE)) {
++            val (valid,events)=probeScenario(mode)
++            assertFalse(mode.name,valid)
++            assertTrue(mode.name,events.any{it.contains("phase=release result=ok")})
++        }
++    }
++    @Test fun successfulProbeVerifiesReleaseAndDoesNotHideReleaseErrors() {
++        val (valid,events)=probeScenario(ProbeReply.OK)
++        assertTrue(valid)
++        assertTrue(events.any{it.contains("phase=release result=ok")})
++        val (stillValid,rejected)=probeScenario(ProbeReply.RELEASE_ERROR)
++        assertTrue(stillValid) // Credential validity and release outcome are separate.
++        assertTrue(rejected.any{it.contains("phase=release result=rejected code=438")})
++        val (_,badIntegrity)=probeScenario(ProbeReply.BAD_RELEASE_INTEGRITY)
++        assertTrue(badIntegrity.any{it.contains("phase=release result=rejected")})
++        val (_,timeout)=probeScenario(ProbeReply.DROP_RELEASE)
++        assertTrue(timeout.any{it.contains("phase=release result=timeout")||it.contains("phase=release result=failed")})
++    }
++    @Test fun allocateQuotaErrorIsDiagnosedAndStillAttemptsCleanup() {
++        val (valid,events)=probeScenario(ProbeReply.ALLOCATE_QUOTA)
++        assertFalse(valid)
++        assertTrue(events.any{it.contains("phase=allocate result=rejected code=486")})
++        assertTrue(events.any{it.contains("phase=release result=ok")})
++    }
++
+     @Test fun boundedFailedAttemptsPreserveOtherUrlsAndOneCredentialPerUrl() {
+         val url="turn:shared:3478";val node=RelayIceServer(listOf(url,"turn:unique:3478"),"bad","p")
+         val selection=RelaySources.select(listOf(node),listOf(RelaySource("other",listOf(RelayIceServer(listOf(url),"good","p")))))
+diff --git a/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnProbeCacheTest.kt b/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnProbeCacheTest.kt
+new file mode 100644
+index 0000000..5f5bb45
+--- /dev/null
++++ b/rtcmedia/src/test/java/com/callagent/rtcmedia/TurnProbeCacheTest.kt
+@@ -0,0 +1,54 @@
++package com.callagent.rtcmedia
++
++import org.junit.Assert.*
++import org.junit.Test
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++import java.util.concurrent.atomic.AtomicInteger
++
++class TurnProbeCacheTest {
++    @Test fun successAndFailureExpireAndCredentialsHaveIndependentKeys() {
++        var now=0L
++        val cache=TurnProbeCache({now},30L,5L,2)
++        var calls=0
++        assertTrue(cache.check("credential-a",100){calls++;true})
++        assertTrue(cache.check("credential-a",100){error("cached")})
++        assertFalse(cache.check("credential-b",100){calls++;false})
++        now=5L
++        assertTrue(cache.check("credential-b",100){calls++;true})
++        now=30L
++        assertFalse(cache.check("credential-a",100){calls++;false})
++        assertEquals(4,calls)
++    }
++    @Test fun concurrentChecksShareOneProbeWithoutHoldingCacheMonitor() {
++        val cache=TurnProbeCache()
++        val entered=CountDownLatch(1)
++        val finish=CountDownLatch(1)
++        val ready=CountDownLatch(4)
++        val calls=AtomicInteger()
++        val executor=Executors.newFixedThreadPool(5)
++        try {
++            val owner=executor.submit<Boolean>{cache.check("same",2000){
++                calls.incrementAndGet();entered.countDown()
++                check(finish.await(2,TimeUnit.SECONDS));true
++            }}
++            assertTrue(entered.await(2,TimeUnit.SECONDS))
++            val waiters=(1..4).map{executor.submit<Boolean>{
++                ready.countDown();cache.check("same",2000){calls.incrementAndGet();true}
++            }}
++            assertTrue(ready.await(2,TimeUnit.SECONDS))
++            finish.countDown()
++            assertTrue(owner.get(2,TimeUnit.SECONDS))
++            waiters.forEach{assertTrue(it.get(2,TimeUnit.SECONDS))}
++            assertEquals(1,calls.get())
++        } finally { finish.countDown();executor.shutdownNow() }
++    }
++    @Test fun capacityEvictsOldResultsAndFailedProbeDoesNotPoisonSingleFlight() {
++        val cache=TurnProbeCache(capacity=1)
++        try { cache.check("a",100){error("failure")} }catch(_:IllegalStateException){}
++        assertTrue(cache.check("a",100){true})
++        assertFalse(cache.check("b",100){false})
++        assertFalse(cache.check("a",100){false})
++    }
++}
