@@ -82,7 +82,7 @@ func (s *Server) Handler() http.Handler {
 		// which optional request fields it accepts before sending them.
 		writeJSON(w, http.StatusOK, map[string]any{"protocol_version": 1, "extensions": SupportedExtensions, "rtc_audio": s.rtc != nil, "rtc_call_control": s.rtc != nil, "push": s.pushReady(), "rtc_sleep": s.rtc != nil && s.pushReady(),
 			"reception_v2": s.rtc != nil, "global_decline_v1": s.rtc != nil,
-			"incoming_ring_until_end": s.rtc != nil})
+			"ice_servers_v1": s.rtc != nil, "incoming_ring_until_end": s.rtc != nil})
 	})
 	mux.HandleFunc("POST /v1/pairings/claim", s.claimPairing)
 	mux.HandleFunc("POST /v1/auth/refresh", s.refreshSession)
@@ -113,6 +113,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/calls/{call_id}/media", s.authenticated(s.selectRTCMedia))
 	mux.HandleFunc("GET /v1/calls/{call_id}/media", s.authenticated(s.getRTCMedia))
 	mux.HandleFunc("POST /v1/calls/{call_id}/media/active", s.authenticated(s.rtcCellularActive))
+	mux.HandleFunc("GET /v1/rtc/ice-servers", s.authenticated(s.rtcIceServers))
 	mux.HandleFunc("GET /v1/rtc/legs/{leg_id}", s.authenticated(s.rtcSignals))
 	mux.HandleFunc("POST /v1/rtc/legs/{leg_id}", s.authenticated(s.rtcSignals))
 	mux.HandleFunc("POST /v1/rtc/control/capability", s.authenticated(s.rtcControlCapability))

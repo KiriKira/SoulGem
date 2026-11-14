@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +26,9 @@ type rtcHTTPState struct {
 type rtcAdmission struct {
 	Binding        rtcsignal.Binding `json:"binding"`
 	MediaTransport string            `json:"media_transport"`
+	Servers        []struct {
+		Username string `json:"username"`
+	} `json:"ice_servers"`
 }
 
 func rtcFixture(t *testing.T, direction string) (*integrationDatabase, integrationFixture, *Server, string) {
@@ -98,8 +107,89 @@ func rtcPost(t *testing.T, api *Server, token string, c rtcsignal.Command, statu
 	return reply
 }
 
+func TestTURNAdmissionQuotaIdentitySeparatesEndpointsCallsAndAttempts(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	s := &Server{now: func() time.Time { return now }, rtc: &rtcMediaRuntime{options: RTCMediaOptions{
+		TURNURLs: []string{"turn:relay.example:3478?transport=udp"}, TURNSecret: "test-secret-not-production",
+	}}}
+	b := rtcsignal.Binding{ClientID: "client", GatewayID: "gateway", CallID: "call-one", AttemptID: "attempt-one"}
+	credential := func(device string) (string, string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		s.writeMediaAdmission(response, Principal{DeviceID: device}, b, false)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("admission credentials must not be HTTP-cached")
+		}
+		var body struct {
+			Servers []struct {
+				Username   string `json:"username"`
+				Credential string `json:"credential"`
+			} `json:"ice_servers"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Servers) != 1 {
+			t.Fatal("missing TURN server")
+		}
+		user, password := body.Servers[0].Username, body.Servers[0].Credential
+		expiry, identity, ok := strings.Cut(user, ":")
+		if !ok || expiry != fmt.Sprint(now.Add(time.Hour).Unix()) {
+			t.Fatal("invalid expiry")
+		}
+		mac := hmac.New(sha1.New, []byte(s.rtc.options.TURNSecret))
+		_, _ = mac.Write([]byte(user))
+		if password != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
+			t.Fatal("invalid REST HMAC")
+		}
+		return user, identity
+	}
+	client, clientID := credential(b.ClientID)
+	gateway, gatewayID := credential(b.GatewayID)
+	if client == gateway || clientID != "client:call-one:attempt-one" || gatewayID != "gateway:call-one:attempt-one" {
+		t.Fatal("quota identity must use the authenticated endpoint and media attempt")
+	}
+	if retry, _ := credential(b.ClientID); retry != client {
+		t.Fatal("idempotent admission retry changed credentials")
+	}
+	now = now.Add(time.Minute)
+	if renewed, renewedID := credential(b.ClientID); renewed == client || renewedID != clientID {
+		t.Fatal("credential renewal must not reset the quota identity")
+	}
+	b.CallID = "call-two"
+	if _, nextID := credential(b.ClientID); nextID == clientID {
+		t.Fatal("different calls share quota")
+	}
+	b.CallID, b.AttemptID = "call-one", "attempt-two"
+	if _, nextID := credential(b.ClientID); nextID == clientID {
+		t.Fatal("different media attempts share quota")
+	}
+}
+
+func TestRTCMediaCloseReportsPreActivationWithoutGuessingICE(t *testing.T) {
+	_, f, api, callID := rtcFixture(t, "outgoing")
+	var logs bytes.Buffer
+	api.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	rtcRegister(t, api, f.gatewayToken)
+	b := rtcSelect(t, api, f.clientToken, callID).Binding
+	host := rtcRead(t, api, f.clientToken, b.LegID, 200)
+	rtcPost(t, api, f.clientToken, rtcCommand(b, rtcsignal.Offer, host.State.Snapshot.Revision), 200)
+	gateway := rtcRead(t, api, f.gatewayToken, b.LegID, 200)
+	rtcPost(t, api, f.gatewayToken, rtcCommand(b, rtcsignal.Answer, gateway.State.Snapshot.Revision), 200)
+	closeCommand := rtcCommand(b, rtcsignal.Close, 0)
+	rtcPost(t, api, f.clientToken, closeCommand, 200)
+	rtcPost(t, api, f.clientToken, closeCommand, 200)
+	text := logs.String()
+	if strings.Count(text, `"msg":"RTC media close observed"`) != 1 ||
+		!strings.Contains(text, `"media_stage":"before_cellular_active"`) ||
+		!strings.Contains(text, `"ice_state":"not_reported"`) {
+		t.Fatal("missing or duplicated pre-activation close observation")
+	}
+}
+
 func TestRTCMediaAdmissionIsExplicitBoundAndIdempotent(t *testing.T) {
 	database, f, api, callID := rtcFixture(t, "outgoing")
+	api.rtc.options = RTCMediaOptions{TURNURLs: []string{"turn:relay.example:3478"}, TURNSecret: "test-secret"}
 	reply := requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, "")
 	requireStatus(t, reply, 200)
 	if !strings.Contains(reply.Body.String(), `"media_transport":"pending"`) {
@@ -113,6 +203,22 @@ func TestRTCMediaAdmissionIsExplicitBoundAndIdempotent(t *testing.T) {
 	second := rtcSelect(t, api, f.clientToken, callID)
 	if first.Binding != second.Binding || first.Binding.CallID != callID || first.Binding.ClientID != f.clientID || first.Binding.GatewayID != f.gatewayID {
 		t.Fatal("admission changed identity across retry")
+	}
+	reply = requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, "")
+	requireStatus(t, reply, 200)
+	var gateway rtcAdmission
+	if err := json.Unmarshal(reply.Body.Bytes(), &gateway); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Servers) != 1 || len(second.Servers) != 1 || len(gateway.Servers) != 1 {
+		t.Fatal("missing TURN credentials")
+	}
+	_, clientQuota, _ := strings.Cut(first.Servers[0].Username, ":")
+	_, retryQuota, _ := strings.Cut(second.Servers[0].Username, ":")
+	_, gatewayQuota, _ := strings.Cut(gateway.Servers[0].Username, ":")
+	if clientQuota != f.clientID+":"+callID+":"+first.Binding.AttemptID || retryQuota != clientQuota ||
+		gatewayQuota != f.gatewayID+":"+callID+":"+first.Binding.AttemptID {
+		t.Fatal("HTTP admission paths did not use their authenticated endpoint")
 	}
 	requireStatus(t, requestJSON(t, api.Handler(), "POST", "/v1/calls/"+callID+"/media", f.otherToken, map[string]string{"media_transport": "webrtc"}, ""), 403)
 	if _, err := database.db.Exec(`UPDATE call_sessions SET state='dialing' WHERE call_id=$1`, callID); err != nil {
@@ -140,6 +246,8 @@ func TestRTCMediaCannotSelectANewEngineAfterDial(t *testing.T) {
 }
 func TestRTCMediaRelaysCommittedSDPAndSeparatesCellularActive(t *testing.T) {
 	database, f, api, callID := rtcFixture(t, "outgoing")
+	var logs bytes.Buffer
+	api.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	rtcRegister(t, api, f.gatewayToken)
 	admission := rtcSelect(t, api, f.clientToken, callID)
 	b := admission.Binding
@@ -178,6 +286,9 @@ func TestRTCMediaRelaysCommittedSDPAndSeparatesCellularActive(t *testing.T) {
 	}
 	closeCommand := rtcCommand(b, rtcsignal.Close, 0)
 	rtcPost(t, api, f.clientToken, closeCommand, 200)
+	if !strings.Contains(logs.String(), `"media_stage":"after_cellular_active"`) {
+		t.Fatal("active media close was misreported as pre-activation")
+	}
 	rtcPost(t, api, f.gatewayToken, rtcCommand(b, rtcsignal.Answer, host.State.Snapshot.Revision), 410)
 	requireStatus(t, requestJSON(t, api.Handler(), "GET", "/v1/calls/"+callID+"/media", f.gatewayToken, nil, ""), 410)
 }
