@@ -1,0 +1,44 @@
+package calls
+
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrInvalid            = errors.New("invalid call request")
+	ErrForbidden          = errors.New("call resource is not available to this client")
+	ErrConflict           = errors.New("call state conflicts with this request")
+	ErrNotFound           = errors.New("call resource not found")
+	ErrGatewayUnavailable = errors.New("gateway is not available for calls")
+	ErrSIMUnavailable     = errors.New("SIM mapping is unavailable or changed")
+	ErrBusy               = errors.New("gateway already has a call in progress")
+	ErrCallIDConflict     = errors.New("call_id is already used by another call")
+	// ErrNoSubscribers: no client on this node takes incoming calls now. The
+	// gateway offers the call to its other nodes.
+	ErrNoSubscribers = errors.New("no client receives incoming calls on this node")
+)
+
+type Call struct {
+	CallID          string     `json:"call_id"`
+	GatewayID       string     `json:"gateway_id"`
+	ClientID        string     `json:"client_id"`
+	SIMID           string     `json:"sim_id"`
+	MappingRevision int64      `json:"mapping_revision"`
+	Direction       string     `json:"direction"`
+	State           string     `json:"state"`
+	StateRevision   int64      `json:"state_revision"`
+	From            *string    `json:"from,omitempty"`
+	To              string     `json:"to"`
+	Reason          *string    `json:"reason,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	// Set once the call was answered; an ended incoming call without it was missed.
+	AnsweredAt *time.Time `json:"answered_at,omitempty"`
+}
+
+type ListResult struct {
+	Items          []Call  `json:"items"`
+	NextCursor     *string `json:"next_cursor"`
+	ResyncRequired bool    `json:"resync_required"`
+}

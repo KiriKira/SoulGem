@@ -1,0 +1,290 @@
+name: Container images
+
+# Prebuilt SoulGem images so a server only pulls and runs (deploy/compose.yaml):
+#   ghcr.io/kirikira/gsm2sip-server    API, worker and admin CLI
+#   ghcr.io/kirikira/gsm2sip           all-in-one: the above plus PostgreSQL and TURN
+# Each architecture builds natively, then deploy/compose.yaml is started from
+# the freshly built images and checked before anything is pushed.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - deploy/**
+      - cmd/**
+      - internal/**
+      - migrations/**
+      - go.mod
+      - go.sum
+      - .github/workflows/images.yml
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Additional public image tag for this build
+        type: string
+        default: ''
+      build_only:
+        description: Build and publish images without running smoke tests
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SERVER_IMAGE: ghcr.io/kirikira/gsm2sip-server
+  ALLINONE_IMAGE: ghcr.io/kirikira/gsm2sip
+
+jobs:
+  build:
+    name: Build and smoke-test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+      ARCH_TAG: build-${{ github.sha }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.SERVER_IMAGE }}
+
+      - name: Build server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: ${{ env.SERVER_IMAGE }}:ci-smoke
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+
+      - name: Smoke-test deploy/compose.yaml with the built image
+        if: ${{ !inputs.build_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke"
+          cp deploy/compose.yaml "$smoke/compose.yaml"
+          cd "$smoke"
+          {
+            echo "GSM2SIP_VERSION=ci-smoke"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "SECRETS_ENCRYPTION_KEY=$(openssl rand -base64 32)"
+          } > .env
+          chmod 600 .env
+          dump() { docker compose ps -a || true; docker compose logs --no-color --tail 200 || true; }
+          trap dump ERR
+          docker compose up -d --pull missing
+          for _ in $(seq 1 90); do
+            curl --fail --silent --max-time 2 http://127.0.0.1:8080/readyz >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8080/readyz
+          echo
+          curl --fail --silent --show-error http://127.0.0.1:8080/v1/capabilities | tee capabilities.json
+          echo
+          python3 - <<'PY'
+          import json
+          c = json.load(open('capabilities.json'))
+          assert 'mesh' in c['extensions']
+          assert c['rtc_call_control'] is True and c['rtc_audio'] is True
+          assert not any('sip' in key for key in c), c
+          PY
+          test "$(docker compose ps --services --status running | wc -l)" -eq 3
+          docker compose run --rm --no-deps --entrypoint /usr/local/bin/mahogsm-admin api \
+            owner create --name ci-smoke >/dev/null
+          docker compose down -v
+
+      - name: Build the all-in-one image from the tested server image
+        run: |
+          set -euo pipefail
+          # The default (docker driver) builder sees the image loaded above.
+          docker buildx build --builder default --load \
+            --build-arg "SERVER_IMAGE=$SERVER_IMAGE:ci-smoke" \
+            --label org.opencontainers.image.source=https://github.com/KiriKira/gsm2sip-server \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --file deploy/allinone/Dockerfile --tag "$ALLINONE_IMAGE:ci-smoke" .
+
+      - name: Smoke-test the all-in-one image, including a restart
+        if: ${{ !inputs.build_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker logs --tail 200 aio || true' ERR
+          docker run -d --name aio -e TURN_PUBLIC_IP=192.0.2.10 \
+            -p 127.0.0.1:18080:8080 -v aio-data:/data "$ALLINONE_IMAGE:ci-smoke"
+          wait_ready() {
+            for _ in $(seq 1 90); do
+              curl --fail --silent --max-time 2 http://127.0.0.1:18080/readyz >/dev/null && return 0
+              sleep 2
+            done
+            return 1
+          }
+          wait_healthy() {
+            for _ in $(seq 1 40); do
+              [ "$(docker inspect --format '{{.State.Health.Status}}' aio)" = healthy ] && return 0
+              sleep 5
+            done
+            return 1
+          }
+          wait_ready
+          curl --fail --silent --show-error http://127.0.0.1:18080/v1/capabilities > /tmp/aio-capabilities.json
+          python3 - <<'PY'
+          import json
+          c = json.load(open('/tmp/aio-capabilities.json'))
+          assert 'mesh' in c['extensions'] and c['rtc_call_control'] is True
+          assert not any('sip' in key for key in c), c
+          PY
+          docker logs aio 2>&1 | grep 'managed TURN listens on 0.0.0.0:3478' >/dev/null
+          docker exec aio mahogsm-admin owner create --name ci-smoke >/dev/null
+          wait_healthy
+          docker restart aio
+          wait_ready
+          wait_healthy
+          docker exec aio mahogsm-admin owner create --name ci-smoke-after-restart >/dev/null
+          # `docker restart` allows the default 10 seconds: PostgreSQL must
+          # have shut down cleanly instead of needing crash recovery.
+          if docker logs aio 2>&1 | grep 'not properly shut down' >/dev/null; then
+            docker logs aio 2>&1 | grep -E '\[gsm2sip\]|shut|terminat' || true
+            exit 1
+          fi
+          docker logs aio 2>&1 | grep -c 'generated secrets_encryption_key' | grep -qx 1
+          # If the relay dies, the whole container must exit so Docker's
+          # restart policy brings it back, rather than idling without calls.
+          # Read the whole listing first: an awk that exits early would
+          # SIGPIPE `docker top`, which pipefail turns into a failure.
+          processes=$(docker top aio -eo pid,comm)
+          if printf '%s\n' "$processes" | grep -q asterisk; then exit 1; fi
+          turn_pid=$(printf '%s\n' "$processes" | awk '$2 == "turnserver" {pid = $1} END {print pid}')
+          test -n "$turn_pid"
+          sudo kill -KILL "$turn_pid"
+          for _ in $(seq 1 60); do
+            [ "$(docker inspect --format '{{.State.Running}}' aio)" = false ] && break
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Running}}' aio)" = false
+          docker logs aio 2>&1 | grep 'a service exited' >/dev/null
+          docker rm -f aio
+          docker volume rm aio-data
+
+      - name: Smoke-test the all-in-one image with no address configured (host network)
+        if: ${{ !inputs.build_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'docker logs --tail 200 aio-auto || true' ERR
+          # On the host network the internal PostgreSQL port shares the
+          # runner's port space; the default (55432) sits inside Linux's
+          # ephemeral range, where an outgoing connection can already hold it.
+          docker run -d --name aio-auto --network host -e HTTP_PORT=18082 -e PG_PORT=25432 \
+            -e TURN_LISTEN_PORT=13478 -e TURN_RELAY_MIN_PORT=49360 -e TURN_RELAY_MAX_PORT=49399 \
+            "$ALLINONE_IMAGE:ci-smoke"
+          for _ in $(seq 1 90); do
+            curl --fail --silent --max-time 2 http://127.0.0.1:18082/readyz >/dev/null && break
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:18082/readyz
+          for _ in $(seq 1 40); do
+            [ "$(docker inspect --format '{{.State.Health.Status}}' aio-auto)" = healthy ] && break
+            sleep 5
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' aio-auto)" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:18082/v1/capabilities | grep -E '"rtc_audio":[[:space:]]*true'
+          # The relay answers STUN binding requests on its configured port.
+          docker exec aio-auto turnutils_stunclient -p 13478 127.0.0.1 | grep -q 'UDP reflexive addr'
+          docker exec aio-auto mahogsm-admin owner create --name ci-auto >/dev/null
+          docker rm -f -v aio-auto
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep ci-smoke
+
+      - name: Smoke optional built-in TURN and relay source API
+        run: ALLINONE_TEST_IMAGE="$ALLINONE_IMAGE:ci-smoke" python3 scripts/test_builtin_turn.py
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the tested images under a per-architecture tag
+        if: env.PUSH == 'true'
+        run: |
+          set -euo pipefail
+          for image in "$SERVER_IMAGE" "$ALLINONE_IMAGE"; do
+            docker tag "$image:ci-smoke" "$image:$ARCH_TAG"
+            docker push "$image:$ARCH_TAG"
+          done
+
+  publish:
+    name: Publish multi-arch tags
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: placeholder
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Combine the tested per-architecture images
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          ARCH_PREFIX: build-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for image in "$SERVER_IMAGE" "$ALLINONE_IMAGE"; do
+            args=()
+            while read -r tag; do
+              [ -n "$tag" ] && args+=(--tag "$image:${tag#placeholder:}")
+            done <<< "$TAGS"
+            docker buildx imagetools create "${args[@]}" \
+              "$image:$ARCH_PREFIX-amd64" "$image:$ARCH_PREFIX-arm64"
+            docker buildx imagetools inspect "$image:sha-${GITHUB_SHA::7}"
+          done
