@@ -338,7 +338,7 @@ func (s *Server) selectRTCMedia(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	s.logger.Info("call media selected", "call_id", callID, "media", "webrtc", "rtc_signaling", "https", "leg_id", b.LegID)
-	s.writeMediaAdmission(w, b, false)
+	s.writeMediaAdmission(w, p, b, false)
 }
 
 func (s *Server) getRTCMedia(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -412,16 +412,19 @@ func (s *Server) getRTCMedia(w http.ResponseWriter, r *http.Request, p Principal
 		rtcError(w, rtcsignal.ErrClosed)
 		return
 	}
-	s.writeMediaAdmission(w, b, active)
+	s.writeMediaAdmission(w, p, b, active)
 }
 
-func (s *Server) writeMediaAdmission(w http.ResponseWriter, b rtcsignal.Binding, active bool) {
+func (s *Server) writeMediaAdmission(w http.ResponseWriter, p Principal, b rtcsignal.Binding, active bool) {
+	w.Header().Set("Cache-Control", "no-store")
 	servers := []map[string]any{}
 	if len(s.rtc.options.STUNURLs) > 0 {
 		servers = append(servers, map[string]any{"urls": s.rtc.options.STUNURLs})
 	}
 	if len(s.rtc.options.TURNURLs) > 0 && s.rtc.options.TURNSecret != "" {
-		username := fmt.Sprintf("%d:%s:%s", s.now().Add(time.Hour).Unix(), b.ClientID, b.CallID)
+		// coturn removes the timestamp before accounting user-quota. Each endpoint
+		// and media attempt needs its own identity, stable across admission retries.
+		username := fmt.Sprintf("%d:%s:%s:%s", s.now().Add(time.Hour).Unix(), p.DeviceID, b.CallID, b.AttemptID)
 		mac := hmac.New(sha1.New, []byte(s.rtc.options.TURNSecret))
 		_, _ = mac.Write([]byte(username))
 		servers = append(servers, map[string]any{"urls": s.rtc.options.TURNURLs, "username": username, "credential": base64.StdEncoding.EncodeToString(mac.Sum(nil))})
@@ -431,6 +434,9 @@ func (s *Server) writeMediaAdmission(w http.ResponseWriter, b rtcsignal.Binding,
 
 // rtcIceServers issues credentials independently of any call, for the exact
 // authenticated device. Session and device revocation are checked by middleware.
+// Source clients cache these credentials across calls, so their user-quota is
+// device-wide (including overlapping gathering/probes), not per call. Changing
+// the timestamp or adding a per-response nonce cannot isolate a cached credential.
 func (s *Server) rtcIceServers(w http.ResponseWriter, r *http.Request, p Principal) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.requireRTC(w) {
@@ -475,6 +481,20 @@ func (s *Server) rtcSignals(w http.ResponseWriter, r *http.Request, p Principal)
 		}
 		if command.Kind != rtcsignal.Candidate && command.Kind != rtcsignal.EndCandidates {
 			s.logger.Info("RTC signal committed", "call_id", command.CallID, "leg_id", legID, "media", "webrtc", "event", command.Kind, "duplicate", duplicate)
+		}
+		if command.Kind == rtcsignal.Close && !duplicate {
+			// The server cannot observe ICE or TURN error codes. Report only the
+			// persisted activation boundary, without inventing a network cause.
+			var active bool
+			if err := s.db.QueryRowContext(ctx, `SELECT cellular_active FROM rtc_media_sessions WHERE leg_id=$1`, legID).Scan(&active); err != nil {
+				s.logger.Warn("RTC media close diagnostics unavailable", "call_id", command.CallID, "leg_id", legID)
+			} else {
+				stage := "before_cellular_active"
+				if active {
+					stage = "after_cellular_active"
+				}
+				s.logger.Info("RTC media close observed", "call_id", command.CallID, "leg_id", legID, "attempt_id", command.AttemptID, "actor_role", p.Role, "media_stage", stage, "cellular_active", active, "ice_state", "not_reported")
+			}
 		}
 		writeJSON(w, 200, map[string]any{"ack": ack, "duplicate": duplicate})
 		return
