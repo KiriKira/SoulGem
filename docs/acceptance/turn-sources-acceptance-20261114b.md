@@ -220,9 +220,10 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 
 | 用例 | 状态 | 具体原因 / 剩余工作 |
 |---|---|---|
-| E1（main APK + PR 版服务端） | **未完成（环境限制）** | main 分支的 `app/build.gradle.kts` 没有 `rtcEmulator` 开关，`-PrtcEmulator=true` 无效，产物只有 `arm64-v8a`（CI 断言报 `missing x86_64 in app APK`），无法装进 x86_64 AVD。**这不是产品缺陷**：main 从未支持模拟器 ABI。可行路径二选一：(a) 给 main 加同样的 `rtcEmulator` ABI 开关后重跑（需改产品代码，不建议为验收改 main）；(b) 用真机跑 E1。另注：main 的 androidTest manifest 未注册 lab runner（`testInstrumentationRunner` 默认值），所以即便有 x86_64 产物也需带 `-PrtcLabRunner` 重新构建。 |
+| E1（main APK + PR 版服务端） | **未完成（环境限制）** | main 分支的 `app/build.gradle.kts` 没有 `rtcEmulator` 开关，`-PrtcEmulator=true` 无效，产物只有 `arm64-v8a`（CI 断言报 `missing x86_64 in app APK`），无法装进 x86_64 AVD。**这不是产品缺陷**：main 从未支持模拟器 ABI。可行路径二选一：(a) 给 main 加同样的 `rtcEmulator` ABI 开关后重跑（需改产品代码，不建议为验收改 main）；(b) 用真机跑 E1。**更正（2026-11-15 复核）**：上一轮此处称「main 的 androidTest manifest 未注册 lab runner」不准确——`origin/main` 已有 `testInstrumentationRunner = providers.gradleProperty("rtcLabRunner").orElse(AndroidJUnitRunner)`，`app/src/androidTest/` 也已包含 `HostJointInstrumentation.kt` 与 `JointLabSupport.kt`。真正的唯一阻塞是 ABI（缺 `rtcEmulator` 的 `abiFilters`），不是 runner 注册。 |
 | P2 的"另一节点作为来源" | **通过（第三轮）** | 见 `p2-measurement-20261115.md`。修正后的拓扑：host 以 nodeB 为当前节点、nodeA 为附加来源（nodeB 无内置 TURN，反向配置才能出强证据）。`mesh_add` 让当前 gateway 在 nodeB 落新行 `87e00561…`，`install_id` 上报为 `83488b1a…`，与设备及 nodeA 的 GA 三方一致——**全程未改 `install_id` 字段**。通话 2874 ms、双端 `relay/relay`、`sources=1`；两端 `relay_sources` 分别指向 nodeA 的 GA 与 nodeA 新 client `3c1d1208…`；抓包 33378 包中 22278 包走 `udp/3478`、11100 包走中继端口段 49160-49259，nodeB 无 TURN 部署，故中继必由 nodeA 承载。原「环境限制、拓扑无法建立」结论作废。 |
-| C5 的截断打点 | **未观察到** | 见 4.6。是否应在裁剪时输出 `relay_sources_truncated` 由产品判断；本轮不改代码。 |
+| C5 的截断打点 | **通过（2026-11-15 补测）** | 已实测捕获。两条各 20 地址的静态来源合并 40 > 32 时，host 输出 `sources=3` 并紧随 `event=relay_sources_truncated`，通话仍以 `relay/relay` 接通；移除其中一条后 `sources=2` 且不再截断。见 `c5-f2-multi-source-20261115.md`。 |
+| F2（来源吊销） | **通过（2026-11-15 补测）** | 移除一条来源后，下一通电话 `sources` 由 3 降为 2，被移除来源不再参与选路，吊销即时生效。见 `c5-f2-multi-source-20261115.md`。 |
 
 ---
 
