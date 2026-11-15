@@ -55,7 +55,7 @@ APK 由临时验收 workflow 构建（仅新增 `.github/workflows/acceptance-bu
 |---|---|
 | 测试 Worker（GriefSeed） | **已部署** 到 `2c2062a`，Cloudflare 版本 ID `5ce552d9-9a10-43af-b4eb-449a395e9b7e`，脚本 `modified_on` = 2026-11-14T14:22:00Z（经 Cloudflare API 核实）。使用既有测试部署与测试 TURN key，**未使用生产凭据、未触碰生产 Worker**。 |
 | 测试 TURN key | 沿用第一轮创建的测试 Realtime TURN key（`turn_key_uid` 记录在案，值不写入报告）。 |
-| 测试 coturn（C3/C4/C5 用） | 本轮临时启动 `turn-test` 容器（`--network host`，`labuser`/明文口令不入报告），3478/TCP+UDP 可用；**TLS 5349 无法绑定**（该镜像把 TLS 监听器绑到 3478 冲突），故 C6 改用 Worker 的 Cloudflare TURN 做 UDP 阻断验证。 |
+| 测试 coturn（C3/C4/C5 用） | 本轮临时启动 `turn-test` 容器（`--network host`，`<lab-turn-user>`/明文口令不入报告），3478/TCP+UDP 可用；**TLS 5349 无法绑定**（该镜像把 TLS 监听器绑到 3478 冲突），故 C6 改用 Worker 的 Cloudflare TURN 做 UDP 阻断验证。 |
 | 实验机 swap | 本轮新增 8 GiB swapfile（原为 0）。 |
 | GW 模拟器 | 内存从 1024 MB 提到 **3072 MB / 2 核**（原配置导致 `uiautomator` 被内核 OOM 杀死）。 |
 
@@ -175,12 +175,13 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 
 对应代码 `HostNodes.kt:119–127`：添加第二节点时会校验该服务器上报的 `installId` 必须与节点列表已记录的**同一台旧手机**一致，不一致即拒绝并回滚。
 
-**本实验室的 nodeA 与 nodeB 各自跑了独立的 gateway 实例（不同 installId），而产品的"mesh 双节点"前提是同一台 gateway 手机同时注册到两个服务器。** 因此 P2 的拓扑在本环境无法建立，`sources=0` 是配置不成立的表现，不是 `sources` 语义问题，也不是产品缺陷。
+**（第三轮修正）原先记「nodeA 与 nodeB 各跑独立 gateway 实例、不同 installId，故 P2 拓扑在本环境无法建立」，该判断收回。** `install_id` 是 App 安装标识，同一台手机对两个服务器上报的应当是同一个值；当时两库不等，是因为 nodeB 那行是陈旧注册（`last_seen_at` 停在前一日）。让当前 gateway 对 nodeB 执行 `mesh_add`，会在 nodeB 落一条带当前 `install_id` 的新 gateway 行，两库即一致。所以 P2 属**配置未建立**，可补齐后验证。
 
 #### 结论
 
-- P2 **未能按设计执行**，记为**环境限制**，不作为通过项，也不能用来评价 `sources` 的行为。
-- 若要真正验证"非当前节点作为来源"，需要一个 gateway 手机同时配对 A、B 的拓扑（`HostNodes` 的 installId 校验才能通过），本轮不具备。
+- P2 **本轮未取得通过证据**（`sources=0`），原因是节点注册表为空 = 配置未建立，**不再记为"环境限制/拓扑不可为"**；须用 `mesh_add` 让当前 gateway 在 nodeB 注册后重验。
+- 若要真正验证"非当前节点作为来源"，需要一个 gateway 手机同时配对 A、B 的拓扑；该拓扑**在本环境可建立**，只是期间 AVD 重建/重装使 nodeB 行成为陈旧注册，需按 `mesh_add` 流程补齐。
+- **而 nodeB 没有内置 TURN**，故"A 为当前节点 + B 为附加来源"即使得到 `sources=1`，该来源的 `ice_servers` 为空，只能证明空来源进入 resolve，**不能证明它承载中继**。要取得有效 TURN 证据须反向配置：host 当前节点改为 B，由有 TURN 的 A 充当附加来源。
 - 同时更正一个**观测误读**：此前引用的 `nodes=1` 出自 `event=incoming_offered nodes=N`（Homura `GatewayCallControl.kt:185`），含义是**本次成功下发 offer 的节点数**，不是客户端注册表里的节点数量。用它推断"App 只认识一个节点"是错的。
 - `reason=no_turn_servers_configured` 只出现在另一条实验 P2Bprobe（绑无内置 TURN 的 B 且无外部来源），不属于 P2 本组。
 
@@ -196,8 +197,8 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 | 用例 | 结果 | 关键证据 |
 |---|---|---|
 | C3 静态 TURN（含不可达项） | **通过** | 一条来源含 `turn:…:3478` + `turn:…:3999`（后者不可达）；`external_sources_configured=2 enabled=2 selected=2`、`selected_turn_urls=7`，通话 `relay/relay` 接通，5324 ms |
-| C4 来源置顶 | **通过（带限定）** | 「优先使用」切到 `static-lab` 后通话接通（3688 ms）；但该通 `relay_sources=current-node`，即媒体实际走节点下发的 TURN，**不是**置顶来源。置顶生效本身已确认（唯一勾选），"置顶来源优先承载"未被本用例证明 |
-| C5 URL 超 32 截断 | **通过（带限定）** | 40 个地址被表单接受并接通（2531 ms），无崩溃；`gateway_sources=2`。但**未观察到 `relay_sources_truncated` 事件**——`MAX_URLS=32` 的裁剪在 `select()` 内以 `require` 处理单 server 的地址数，不经过打点分支。该来源也未出现在来源列表里（未持久化） |
+| C4 来源置顶 | **通过（第三轮补证）** | 两端节点来源全部关闭、`static-lab` 唯一置顶后，通话 3225/3569 ms 建立，双端 `relay/relay`；`node_enabled=false`、`external_sources_selected=1`、`selected_turn_urls=1`、`candidate_types=relay`（无 host/srflx 旁路）。**承载方证据**：测试 coturn（3480）在通话时刻记录 4 次 allocation（`Global turn allocation count incremented, now 1→4`），nodeA 内置 coturn 同期零 allocation。详见 `c4-measurement-20261115.md`。第二轮「置顶来源优先承载未被证明」的缺口已补齐 |
+| C5 来源内 URL 上限 | **通过（第三轮更正）** | **不存在「超 32 截断」路径**。单来源 32 个地址：保存成功、`selected_turn_urls=32`；33 个地址：对话框不关闭、字段保留、列表无新行，即硬失败。`RelaySources.select()` 以 `require(server.urls.size <= MAX_URLS) { "url_budget" }` 处理，表单保存时即调用并把异常 `catch` 成一句通用提示，不落盘。`relay_sources_truncated` 只可能来自**多来源合并**超预算。第二轮「40 地址被接受并接通」系测试工具缺陷（`input text` 整串被截断到约 239 字符，实际只写入 12 个地址）。详见 `c5-measurement-20261115.md` |
 | C6 阻断 UDP 只留 TCP/TLS | **通过** | 仅保留 Worker 来源时，阻断出方向 UDP 3478/5349 后通话仍接通（3413 ms），`relay/relay` → 说明走了 TCP/TLS 路径 |
 
 ### 4.7 E2（PR APK + main 版服务端）
@@ -218,7 +219,7 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 | 用例 | 状态 | 具体原因 / 剩余工作 |
 |---|---|---|
 | E1（main APK + PR 版服务端） | **未完成（环境限制）** | main 分支的 `app/build.gradle.kts` 没有 `rtcEmulator` 开关，`-PrtcEmulator=true` 无效，产物只有 `arm64-v8a`（CI 断言报 `missing x86_64 in app APK`），无法装进 x86_64 AVD。**这不是产品缺陷**：main 从未支持模拟器 ABI。可行路径二选一：(a) 给 main 加同样的 `rtcEmulator` ABI 开关后重跑（需改产品代码，不建议为验收改 main）；(b) 用真机跑 E1。另注：main 的 androidTest manifest 未注册 lab runner（`testInstrumentationRunner` 默认值），所以即便有 x86_64 产物也需带 `-PrtcLabRunner` 重新构建。 |
-| P2 的"另一节点作为来源" | **未完成（环境限制）** | 见 4.4。产品要求加入节点列表的第二服务器上必须是**同一台旧手机**（`HostNodes.kt:119–127` 的 `installId` 校验），而本实验室 nodeA/nodeB 各跑独立 gateway 实例，`HostNodes.add` 直接拒绝（"这个服务器上是另一台旧手机"）。`sources=0` 属配置未成立，不能用于评价该功能。需要"一台 gateway 同时配对 A、B"的拓扑才能验证。 |
+| P2 的"另一节点作为来源" | **待验证（修正原判断）** | 原记"环境限制、拓扑无法建立"，**该结论收回**。真实原因不是拓扑不可能，而是 nodeB 的 gateway 行是**陈旧注册**：nodeB `install_id` 仍为 `dcd30923-030e-4018-ac9a-65fbc99f7717`（`last_seen_at` 停在前一日），而当前设备与 nodeA 已是 `83488b1a-f665-4851-8712-0c7f50f61e9b`。`install_id` 是 App 安装标识，让当前 gateway 对 nodeB 执行 `mesh_add` 会在 nodeB 落一条**带当前 install_id 的新 gateway 行**，两库即一致，`HostNodes.add` 的校验随之通过。因此 P2 属"配置未建立"，可用 `mesh_add` 补齐后验证，不能算产品缺陷也不能算环境不可为。待执行。 |
 | C5 的截断打点 | **未观察到** | 见 4.6。是否应在裁剪时输出 `relay_sources_truncated` 由产品判断；本轮不改代码。 |
 
 ---
