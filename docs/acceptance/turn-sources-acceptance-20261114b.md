@@ -127,10 +127,12 @@ admission.ice_servers → RtcAudioSession.nodeServers
 | P1 | | 外呼 | gateway | 3 | 121 / 287 / 403 | 0 |
 | P1 | | 来电 | host | 3 | 4 / 5 / 6 | 0 |
 | P1 | | 来电 | gateway | 3 | 3 / 4 / 7 | 0 |
-| P2 | 绑定 A，mesh B | 外呼 | host | 3 | 130 / 133 / 446 | 0 |
-| P2 | | 外呼 | gateway | 3 | 56 / 282 / 407 | 0 |
-| P2 | | 来电 | host | 3 | 6 / 9 / 10 | 0 |
-| P2 | | 来电 | gateway | 3 | 3 / 8 / 8 | 0 |
+| P2（第二轮，绑定 A + mesh B 未成立） | 绑定 A，mesh B | 外呼 | host | 3 | 130 / 133 / 446 | 0 |
+| P2（第二轮） | | 外呼 | gateway | 3 | 56 / 282 / 407 | 0 |
+| P2（第二轮） | | 来电 | host | 3 | 6 / 9 / 10 | 0 |
+| P2（第二轮） | | 来电 | gateway | 3 | 3 / 8 / 8 | 0 |
+| P2（第三轮，B 当前 + A 附加） | host 绑 B，mesh A | 外呼 | host | 1 | — / 102 / — | **1** |
+| P2（第三轮） | | 外呼 | gateway | 1 | — / 53 / — | **1** |
 | P3 | 节点 B + Worker 外部来源 | 外呼 | host | 3 | 5 / 25 / 339 | 1 |
 | P3 | | 外呼 | gateway | 3 | 4 / 5 / 263 | 1 |
 | P3 | | 来电 | host | 3 | 5 / 8 / 25 | 1 |
@@ -144,9 +146,9 @@ admission.ice_servers → RtcAudioSession.nodeServers
 
 "动作 → 通话建立"总耗时（外呼中位）：P1 2491 ms、P2 3055 ms、P3 2416 ms、P4 2321 ms；来电中位：P1 4891 ms、P2 5104 ms、P3 4821 ms。
 
-**结论**：`sources=` 能区分配置（P1 = 0，P3/P4 = 1）。**P2 实测也是 0，但那不是该配置的应有值**——按代码 P2 应为 1，实测 0 的原因是节点注册表为空（见 4.4），属配置未成立，不能作为"`sources` 能区分双节点配置"的证据。外部来源的代价集中在**首次**拉取（几百 ms 到 1.5 s），缓存后回落到毫秒级，与文档"来源刷新最多 1.5 s"一致。
+**结论**：`sources=` 能区分配置（P1 = 0，P3/P4 = 1）。第二轮 P2 实测 0 是因为当时节点注册表为空、配置未成立，不具参考价值；**第三轮把拓扑修正为「host 绑 B + mesh A」后，P2 两端均为 `sources=1`**，并与 P3/P4 的 1 一致，说明 `sources` 的语义是"非当前节点的附加来源数"，与来源具体是哪一类无关。外部来源的代价集中在**首次**拉取（几百 ms 到 1.5 s），缓存后回落到毫秒级，与文档"来源刷新最多 1.5 s"一致。
 
-### 4.4 P2 的补充说明（拓扑选择）— 已更正两次，结论为"环境限制，未能成立"
+### 4.4 P2 的补充说明（拓扑选择）— 第三轮已通过
 
 **第一次写法**（"mesh 第二节点没成为来源，与 C2 不一致，待产品确认"）推理错误；**第二次修订**归因为"配对流程没写注册表"，也不完整。最终核实如下。
 
@@ -179,8 +181,8 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 
 #### 结论
 
-- P2 **本轮未取得通过证据**（`sources=0`），原因是节点注册表为空 = 配置未建立，**不再记为"环境限制/拓扑不可为"**；须用 `mesh_add` 让当前 gateway 在 nodeB 注册后重验。
-- 若要真正验证"非当前节点作为来源"，需要一个 gateway 手机同时配对 A、B 的拓扑；该拓扑**在本环境可建立**，只是期间 AVD 重建/重装使 nodeB 行成为陈旧注册，需按 `mesh_add` 流程补齐。
+- **P2 第三轮通过**：host 以 nodeB 为当前节点、nodeA 为附加来源；`mesh_add` 使 nodeB 新 gateway 行上报 `install_id=83488b1a-…`，与设备及 nodeA 的 GA 三方一致（未改任何 `install_id` 字段）。外呼 2874 ms、双端 `relay/relay`、`sources=1`，两端 `relay_sources` 均指向 nodeA（GA / 新 client `3c1d1208…`）；抓包 22278 包走 `udp/3478`、11100 包走中继端口段，nodeB 无 TURN 部署，中继必由 nodeA 承载。详见 `p2-measurement-20261115.md`。
+- 若要真正验证"非当前节点作为来源"，需要一个 gateway 手机同时配对 A、B 的拓扑；该拓扑**在本环境可建立**，此前记录为不可建立是错误的，真实原因是 nodeB 行陈旧。
 - **而 nodeB 没有内置 TURN**，故"A 为当前节点 + B 为附加来源"即使得到 `sources=1`，该来源的 `ice_servers` 为空，只能证明空来源进入 resolve，**不能证明它承载中继**。要取得有效 TURN 证据须反向配置：host 当前节点改为 B，由有 TURN 的 A 充当附加来源。
 - 同时更正一个**观测误读**：此前引用的 `nodes=1` 出自 `event=incoming_offered nodes=N`（Homura `GatewayCallControl.kt:185`），含义是**本次成功下发 offer 的节点数**，不是客户端注册表里的节点数量。用它推断"App 只认识一个节点"是错的。
 - `reason=no_turn_servers_configured` 只出现在另一条实验 P2Bprobe（绑无内置 TURN 的 B 且无外部来源），不属于 P2 本组。
@@ -219,7 +221,7 @@ NodeSetupFailure: 这个服务器上是另一台旧手机，不能加入同一�
 | 用例 | 状态 | 具体原因 / 剩余工作 |
 |---|---|---|
 | E1（main APK + PR 版服务端） | **未完成（环境限制）** | main 分支的 `app/build.gradle.kts` 没有 `rtcEmulator` 开关，`-PrtcEmulator=true` 无效，产物只有 `arm64-v8a`（CI 断言报 `missing x86_64 in app APK`），无法装进 x86_64 AVD。**这不是产品缺陷**：main 从未支持模拟器 ABI。可行路径二选一：(a) 给 main 加同样的 `rtcEmulator` ABI 开关后重跑（需改产品代码，不建议为验收改 main）；(b) 用真机跑 E1。另注：main 的 androidTest manifest 未注册 lab runner（`testInstrumentationRunner` 默认值），所以即便有 x86_64 产物也需带 `-PrtcLabRunner` 重新构建。 |
-| P2 的"另一节点作为来源" | **待验证（修正原判断）** | 原记"环境限制、拓扑无法建立"，**该结论收回**。真实原因不是拓扑不可能，而是 nodeB 的 gateway 行是**陈旧注册**：nodeB `install_id` 仍为 `dcd30923-030e-4018-ac9a-65fbc99f7717`（`last_seen_at` 停在前一日），而当前设备与 nodeA 已是 `83488b1a-f665-4851-8712-0c7f50f61e9b`。`install_id` 是 App 安装标识，让当前 gateway 对 nodeB 执行 `mesh_add` 会在 nodeB 落一条**带当前 install_id 的新 gateway 行**，两库即一致，`HostNodes.add` 的校验随之通过。因此 P2 属"配置未建立"，可用 `mesh_add` 补齐后验证，不能算产品缺陷也不能算环境不可为。待执行。 |
+| P2 的"另一节点作为来源" | **通过（第三轮）** | 见 `p2-measurement-20261115.md`。修正后的拓扑：host 以 nodeB 为当前节点、nodeA 为附加来源（nodeB 无内置 TURN，反向配置才能出强证据）。`mesh_add` 让当前 gateway 在 nodeB 落新行 `87e00561…`，`install_id` 上报为 `83488b1a…`，与设备及 nodeA 的 GA 三方一致——**全程未改 `install_id` 字段**。通话 2874 ms、双端 `relay/relay`、`sources=1`；两端 `relay_sources` 分别指向 nodeA 的 GA 与 nodeA 新 client `3c1d1208…`；抓包 33378 包中 22278 包走 `udp/3478`、11100 包走中继端口段 49160-49259，nodeB 无 TURN 部署，故中继必由 nodeA 承载。原「环境限制、拓扑无法建立」结论作废。 |
 | C5 的截断打点 | **未观察到** | 见 4.6。是否应在裁剪时输出 `relay_sources_truncated` 由产品判断；本轮不改代码。 |
 
 ---
