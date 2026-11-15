@@ -1,0 +1,31 @@
+{
+  "gateway": {
+    "status": "OK",
+    "call_id": null,
+    "phase": null,
+    "active_node": null,
+    "node_health": null,
+    "runtime_status": null
+  },
+  "host": {
+    "status": "OK",
+    "call_id": "482b51f7-ba0a-4191-b944-6ae8c037df28",
+    "phase": "ENDED",
+    "active_node": "http://<lab-host>:8082/v1",
+    "node_health": [
+      {
+        "key": "4cf5b36c-b513-45b6-a77d-a371b2bb8455",
+        "api_url": "http://<lab-host>:8082/v1",
+        "active": true,
+        "health": "NodeHealth(consecutiveFailures=0, consecutiveSuccesses=4, rttMillis=5, gatewayOnline=true, checkedAt=1794725126182, issue=null, gatewayId=87e00561-aac1-49c4-aa7d-2df34d6c49f5, callReady=true)"
+      },
+      {
+        "key": "fc8265a4-67d6-47b1-a699-810cd38d961c",
+        "api_url": "http://<lab-host>:8080/v1",
+        "active": false,
+        "health": "NodeHealth(consecutiveFailures=0, consecutiveSuccesses=4, rttMillis=4, gatewayOnline=true, checkedAt=1794725126182, issue=null, gatewayId=c8eb78d7-553b-4169-991a-ab3e97536edf, callReady=true)"
+      }
+    ],
+    "runtime_status": "通话已结束。"
+  }
+}

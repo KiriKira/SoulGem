@@ -1,0 +1,10 @@
+06:00:07.157 count=1
+06:00:07.157 count=2
+06:00:07.993 count=3
+06:00:08.014 count=4
+06:00:08.885 count=3
+06:01:37.322 count=2
+06:01:37.902 count=1
+06:01:37.909 count=0
+--- nodeA coturn allocations in same window (expect none)
+0

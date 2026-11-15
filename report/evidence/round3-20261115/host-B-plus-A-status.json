@@ -1,0 +1,24 @@
+{
+  "id": "044c01bb-94d3-4506-99ac-711cf23c85f3",
+  "status": "OK",
+  "listening": true,
+  "media": "WebRTC",
+  "call_control": "rtc",
+  "runtime_status": "\u547c\u53eb\u63a7\u5236\u5df2\u5c31\u7eea\uff1b\u540e\u53f0\u6765\u7535\u63a5\u6536\u5df2\u542f\u7528\u3002",
+  "pcm": [],
+  "active_node": "http://<lab-host>:8082/v1",
+  "node_health": [
+    {
+      "key": "4cf5b36c-b513-45b6-a77d-a371b2bb8455",
+      "api_url": "http://<lab-host>:8082/v1",
+      "active": true,
+      "health": "null"
+    },
+    {
+      "key": "fc8265a4-67d6-47b1-a699-810cd38d961c",
+      "api_url": "http://<lab-host>:8080/v1",
+      "active": false,
+      "health": "null"
+    }
+  ]
+}

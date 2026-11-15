@@ -1,0 +1,10 @@
+{
+  "id": "8ea1738d-84b4-4782-bf58-2abf2a93dda3",
+  "status": "OK",
+  "listening": true,
+  "media": "WebRTC",
+  "call_control": "rtc",
+  "runtime_status": "\u547c\u53eb\u63a7\u5236\u5df2\u5c31\u7eea\uff1b\u540e\u53f0\u6765\u7535\u63a5\u6536\u5df2\u542f\u7528\u3002",
+  "pcm": [],
+  "node_health": []
+}

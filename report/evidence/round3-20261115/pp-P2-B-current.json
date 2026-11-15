@@ -1,0 +1,91 @@
+{
+  "label": "P2-B-current",
+  "direction": "out",
+  "hold_s": 20,
+  "rc": 0,
+  "call_id": "482b51f7-ba0a-4191-b944-6ae8c037df28",
+  "host": {
+    "relay_sources_resolved": [
+      {
+        "ts": "06:39:55.554",
+        "elapsed_ms": 102,
+        "sources": 1,
+        "leg_id": null
+      }
+    ],
+    "sources": 1,
+    "prep_ms": 102,
+    "event_stamps": {
+      "selected": "06:39:55.584",
+      "control_early": "06:39:55.732",
+      "audio_suspended": "06:39:56.318",
+      "native_ready": "06:39:56.319",
+      "gathering_gathering": "06:39:56.336",
+      "offer_created": "06:39:56.337",
+      "offer_committed": "06:39:56.642",
+      "offer_sent": "06:39:56.643",
+      "stats": "06:39:56.699",
+      "gathering_complete": "06:39:57.001",
+      "ice_checking": "06:39:57.011",
+      "answer_applied": "06:39:57.012",
+      "peer_connecting": "06:39:57.390",
+      "peer_connected": "06:39:57.420",
+      "ice_connected": "06:39:57.423",
+      "ice_completed": "06:39:57.587",
+      "end_of_candidates_committed": "06:39:57.694",
+      "media_and_cellular_ready": "06:40:00.408",
+      "control_connected": "06:40:00.721",
+      "audio_enabled": "06:40:01.948",
+      "ice_closed": "06:41:24.820",
+      "peer_closed": "06:41:24.822",
+      "native_closed": "06:41:24.829",
+      "closed": "06:41:24.835",
+      "control_disconnected": "06:41:24.867"
+    }
+  },
+  "gateway": {
+    "relay_sources_resolved": [
+      {
+        "ts": "06:39:56.445",
+        "elapsed_ms": 53,
+        "sources": 1,
+        "leg_id": null
+      }
+    ],
+    "sources": 1,
+    "prep_ms": 53,
+    "event_stamps": {
+      "selected": "06:39:56.461",
+      "audio_suspended": "06:39:56.890",
+      "native_ready": "06:39:56.892",
+      "gathering_gathering": "06:39:57.138",
+      "answer_committed": "06:39:57.406",
+      "stats": "06:39:57.451",
+      "gathering_complete": "06:39:57.553",
+      "peer_connecting": "06:39:57.694",
+      "ice_checking": "06:39:57.697",
+      "peer_connected": "06:39:57.891",
+      "ice_connected": "06:39:57.892",
+      "end_of_candidates_committed": "06:39:58.016",
+      "prepared": "06:39:58.048",
+      "audio_enabled": "06:40:00.568",
+      "cellular_pcm_started": "06:40:00.574",
+      "cellular_active": "06:40:00.611",
+      "ice_disconnected": "06:41:25.312",
+      "failed": "06:41:25.390",
+      "ice_closed": "06:41:25.416",
+      "peer_closed": "06:41:25.419",
+      "native_closed": "06:41:25.489",
+      "closed": "06:41:25.492"
+    }
+  },
+  "anchor_kind": "telecom_call_created",
+  "anchor_ts": "06:39:54.546",
+  "total_action_to_established_ms": 2874.0,
+  "answer_to_established_ms": null,
+  "ring_to_selected_ms": null,
+  "host_selected_pair": "relay/relay",
+  "gateway_selected_pair": "relay/relay",
+  "host_relay_sources": "node-3c1d1208-b607-4941-8296-e99cc0fb750d",
+  "gateway_relay_sources": "node-c8eb78d7-553b-4169-991a-ab3e97536edf"
+}

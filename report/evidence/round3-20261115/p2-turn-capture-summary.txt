@@ -1,0 +1,16 @@
+capture: udp port 3478 or portrange 49160-49259, interface any, -U
+total_packets=33378
+packets_udp_3478=22278
+packets_relay_49160_49259=11100
+--- per-destination-port histogram (top 12)
+  11138 3478
+   5600 40635
+   5589 49242
+   5506 53730
+   5492 49184
+     28 55671
+     17 49235
+      4 53991
+      2 49174
+      1 47488
+      1 36877

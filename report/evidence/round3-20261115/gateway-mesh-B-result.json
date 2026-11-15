@@ -1,0 +1,11 @@
+{
+  "id": "cdbe2e0f-1051-4062-8c4c-edaf140daabe",
+  "added_gateway_id": "87e00561-aac1-49c4-aa7d-2df34d6c49f5",
+  "status": "OK",
+  "bridge": "IDLE",
+  "media": "webrtc",
+  "call_control": "rtc",
+  "telecom_state": 0,
+  "pcm": [],
+  "dtmf_events": []
+}

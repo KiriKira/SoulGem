@@ -1,0 +1,77 @@
+{
+  "label": "C5-32-out",
+  "direction": "out",
+  "hold_s": 15,
+  "rc": 0,
+  "call_id": "dacbbdbb-ede6-4cbb-9b18-7669980606b7",
+  "host": {
+    "relay_sources_resolved": [
+      {
+        "ts": "03:57:15.532",
+        "elapsed_ms": 650,
+        "sources": 0,
+        "leg_id": null
+      }
+    ],
+    "sources": 0,
+    "prep_ms": 650,
+    "event_stamps": {
+      "selected": "03:57:15.963",
+      "audio_suspended": "03:57:16.063",
+      "native_ready": "03:57:16.064",
+      "control_early": "03:57:16.085",
+      "gathering_gathering": "03:57:16.135",
+      "offer_created": "03:57:16.163",
+      "offer_committed": "03:57:16.187",
+      "offer_sent": "03:57:16.188",
+      "stats": "03:57:16.489",
+      "gathering_complete": "03:57:16.490",
+      "ice_checking": "03:57:17.443",
+      "answer_applied": "03:57:17.447",
+      "failed": "03:57:31.294",
+      "ice_closed": "03:57:31.297",
+      "peer_closed": "03:57:31.298",
+      "native_closed": "03:57:31.309",
+      "closed": "03:57:31.309",
+      "control_disconnected": "03:57:31.533"
+    }
+  },
+  "gateway": {
+    "relay_sources_resolved": [
+      {
+        "ts": "03:57:16.976",
+        "elapsed_ms": 265,
+        "sources": 1,
+        "leg_id": null
+      }
+    ],
+    "sources": 1,
+    "prep_ms": 265,
+    "event_stamps": {
+      "selected": "03:57:16.992",
+      "audio_suspended": "03:57:17.001",
+      "native_ready": "03:57:17.003",
+      "gathering_gathering": "03:57:17.053",
+      "gathering_complete": "03:57:17.083",
+      "relay_no_local_candidates": "03:57:17.090",
+      "answer_committed": "03:57:17.105",
+      "ice_checking": "03:57:17.108",
+      "stats": "03:57:17.138",
+      "failed": "03:57:31.594",
+      "ice_closed": "03:57:31.598",
+      "peer_closed": "03:57:31.600",
+      "native_closed": "03:57:31.620",
+      "closed": "03:57:31.620",
+      "close_committed": "03:57:31.629"
+    }
+  },
+  "anchor_kind": "telecom_call_created",
+  "anchor_ts": "03:57:14.284",
+  "total_action_to_established_ms": null,
+  "answer_to_established_ms": null,
+  "ring_to_selected_ms": null,
+  "host_selected_pair": "null/null",
+  "gateway_selected_pair": "null/null",
+  "host_relay_sources": "unknown",
+  "gateway_relay_sources": "unknown"
+}
