@@ -82,7 +82,7 @@ func (s *Server) Handler() http.Handler {
 		// which optional request fields it accepts before sending them.
 		writeJSON(w, http.StatusOK, map[string]any{"protocol_version": 1, "extensions": SupportedExtensions, "rtc_audio": s.rtc != nil, "rtc_call_control": s.rtc != nil, "push": s.pushReady(), "rtc_sleep": s.rtc != nil && s.pushReady(),
 			"reception_v2": s.rtc != nil, "global_decline_v1": s.rtc != nil,
-			"ice_servers_v1": s.rtc != nil, "incoming_ring_until_end": s.rtc != nil})
+			"ice_servers_v1": s.rtc != nil, "test_call_v1": s.rtc != nil, "incoming_ring_until_end": s.rtc != nil})
 	})
 	mux.HandleFunc("POST /v1/pairings/claim", s.claimPairing)
 	mux.HandleFunc("POST /v1/auth/refresh", s.refreshSession)
@@ -121,6 +121,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/rtc/control/incoming", s.authenticated(s.rtcControlCreate))
 	mux.HandleFunc("GET /v1/rtc/control/calls", s.authenticated(s.rtcControlRead))
 	mux.HandleFunc("GET /v1/rtc/control/incoming-policy", s.authenticated(s.rtcIncomingPolicy))
+	mux.HandleFunc("POST /v1/rtc/control/test-calls", s.authenticated(s.rtcTestCallCreate))
 	mux.HandleFunc("GET /v1/rtc/control/calls/{call_id}", s.authenticated(s.rtcControlRead))
 	mux.HandleFunc("POST /v1/rtc/control/calls/{call_id}/operations", s.authenticated(s.rtcControlOperate))
 	return requestIDMiddleware(recoverMiddleware(s.logger, mux))

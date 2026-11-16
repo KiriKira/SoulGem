@@ -18,6 +18,7 @@ fixtures = {
     'rtc-control-outgoing.json': 'RTCOutgoingCall',
     'rtc-control-incoming.json': 'RTCIncomingCall',
     'rtc-control-incoming-remaining.json': 'RTCIncomingCall',
+    'rtc-control-incoming-test.json': 'RTCIncomingCall',
     'reception-config.json': 'ReceptionConfig',
     'reception-update.json': 'ReceptionUpdate',
     'wake-sync-required-domains.json': 'WakeSyncRequired',
