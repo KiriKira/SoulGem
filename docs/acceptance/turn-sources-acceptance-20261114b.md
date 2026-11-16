@@ -13,7 +13,7 @@
 | 组件 | 分支 | 提交 | CI |
 |---|---|---|---|
 | SoulGem（服务端） | `codex/turn-source-api` | `6102a87` | 未改动 |
-| GriefSeed（Worker） | `codex/relay-source-foundation` | `2c2062a` | 未改动，本轮**已部署** |
+| GriefSeed（Worker） | `codex/worker-turn-service` | `2c2062a` | 未改动，本轮**已部署** |
 | Madoka（Host APK） | `codex/relay-source-foundation` | `c67f380` | PR workflow 全绿 |
 | Homura（Gateway APK） | `codex/relay-source-foundation` | `ba8b087` | PR workflow 全绿 |
 
