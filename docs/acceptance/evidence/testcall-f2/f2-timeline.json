@@ -1,0 +1,906 @@
+{
+  "schema": 1,
+  "events": [
+    {
+      "epoch": 1794831021.2238078,
+      "event": "step_1_begin"
+    },
+    {
+      "epoch": 1794831065.2531302,
+      "event": "baseline",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "started_epoch": 1794831032.2268558,
+      "isolation_operator_confirmed": true,
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 187.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 226.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      },
+      "source_attribution": "operator inventory + same-call stats must be independently correlated"
+    },
+    {
+      "epoch": 1794831065.257173,
+      "event": "step_1_complete"
+    },
+    {
+      "epoch": 1794831196.7235243,
+      "event": "step_2_begin"
+    },
+    {
+      "epoch": 1794831206.5135765,
+      "event": "pre_revoke_snapshot",
+      "target": {
+        "id": "EAkBPTSbPADj-k08bIuyC04ZqcASv_NEcDmHmOLyYuQ",
+        "revoked": null,
+        "requests": 2,
+        "successes": 2,
+        "failures": 0
+      },
+      "pending": null
+    },
+    {
+      "epoch": 1794831208.7436419,
+      "event": "revoke_http_completed",
+      "T0": 1794831208.7435644
+    },
+    {
+      "epoch": 1794831228.013,
+      "event": "revoked_verified",
+      "token_id": "EAkBPTSbPADj-k08bIuyC04ZqcASv_NEcDmHmOLyYuQ",
+      "revoked": 1794831228013,
+      "requests": 2,
+      "successes": 2,
+      "failures": 0,
+      "note": "Worker stores revoked as ms epoch; verified via read-only GET /admin/tokens"
+    },
+    {
+      "epoch": 1794831229.0,
+      "event": "step_2_complete"
+    },
+    {
+      "epoch": 1794831341.2585382,
+      "event": "step_3_begin"
+    },
+    {
+      "epoch": 1794831342.851789,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831354.4231534,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 14583.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 14618.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831357.7609627,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831379.2998857,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 16114.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 16147.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831380.755716,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831395.1199372,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831411.6818123,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 17643.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 17676.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831412.5924418,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831427.6178193,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831439.5161965,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 19173.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 18900.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831442.3789053,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831459.9602792,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831470.4310153,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 20705.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 20733.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831472.510506,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831487.4277885,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831504.8521104,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 22236.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 22262.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831506.4778376,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831521.7817564,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831533.9053025,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 23767.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 23794.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831535.601353,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831550.597895,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831563.484083,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 24993.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 25322.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831565.5493608,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831581.76987,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831591.973357,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 26830.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 26546.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831596.1150448,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831610.9115963,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831620.9166484,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 28054.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 28075.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831626.7316697,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831640.7722995,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831653.823722,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 29890.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 29605.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831655.5599568,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831670.5753775,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831683.6601908,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 31422.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 31134.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831685.5851147,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831700.7851026,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831713.9060004,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 32953.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 32663.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831715.5946167,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831731.2735431,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831742.6818964,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 34179.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 34193.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831745.5684817,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831761.6486151,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831773.5735233,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 35710.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 35722.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831775.6039462,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831790.9279387,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831802.3478644,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 37241.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 37254.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831805.5871453,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831820.5517206,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831846.0502853,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 39080.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 38783.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831846.76196,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831863.1279056,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 40305.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 40311.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831863.8496852,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831878.8343341,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831899.7606037,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 42143.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 41840.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831900.4693851,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831931.0640872,
+      "event": "old_media",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "roles": {
+        "gateway": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 43368.0,
+          "selected_relay_sources": [
+            "d0e59dea-ce73-46d6-b187-13ebbec264c9"
+          ],
+          "finished": false
+        },
+        "host": {
+          "fresh_quality": true,
+          "both_rates_zero": false,
+          "rx_stopped": false,
+          "rx_observed_total": 43370.0,
+          "selected_relay_sources": [
+            "fc5a7ebc-7f58-4d37-8a63-5bd2e08ca3f3"
+          ],
+          "finished": false
+        }
+      }
+    },
+    {
+      "epoch": 1794831932.3159163,
+      "event": "pending",
+      "pending": null,
+      "revoked": 1794831228013
+    },
+    {
+      "epoch": 1794831942.0453744,
+      "event": "observation_end",
+      "elapsed_s": 600.0001100003719,
+      "pending_summary": {
+        "last_positive_before_first_zero": null,
+        "first_zero_epoch": null,
+        "zero_transition_interval": null,
+        "positive_rechecks_after_zero": [],
+        "scope": "admin pending only; upstream success/expiry not distinguished"
+      },
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "gateway_finished_observed": false,
+      "automatic_hangup": false
+    },
+    {
+      "epoch": 1794831942.0647,
+      "event": "step_3_complete"
+    },
+    {
+      "epoch": 1794831969.344457,
+      "event": "step_4_begin"
+    },
+    {
+      "epoch": 1794832021.399433,
+      "event": "old_call_cleanup",
+      "call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+      "manual_hangup_epoch": 1794831998.9244373,
+      "cleanup_verified": true
+    },
+    {
+      "epoch": 1794832021.4035153,
+      "event": "step_4_complete"
+    },
+    {
+      "epoch": 1794832035.7141612,
+      "event": "step_5_begin"
+    },
+    {
+      "epoch": 1794832158.4738772,
+      "event": "new_call_outcome",
+      "outcome": "not_established_or_probe_error",
+      "error_type": "RuntimeError",
+      "product_verdict": "observation_only"
+    },
+    {
+      "epoch": 1794832181.0599148,
+      "event": "step_5_error",
+      "error_type": "RuntimeError",
+      "detail": "hangup UI not found; manual cleanup required",
+      "recovery": "inspect partial state; never replay a revoke blindly"
+    }
+  ],
+  "completed_steps": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "old_call_id": "97fa49f5-c8c7-4287-acc2-f1759aeb724f",
+  "token_id": "EAkBPTSbPADj-k08bIuyC04ZqcASv_NEcDmHmOLyYuQ",
+  "T0": 1794831208.7435644,
+  "new_call_id": null
+}
