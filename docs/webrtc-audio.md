@@ -75,6 +75,38 @@ cd deploy/turn
 docker compose --env-file ../.env up -d
 ```
 
+## TURN allocation quotas
+
+Both supplied TURN entrypoints default to `TURN_USER_QUOTA=16` and
+`TURN_TOTAL_QUOTA=80`. Unset/empty values use defaults capped to the relay-port
+range (and user quota to total quota). Explicit values must be decimal integers
+in `1..65535`, with `user <= total <= relay-port count`; zero, signs, leading
+zeroes and line injection fail startup. These are **allocation counts, not call
+counts**. They do not disable coturn's resource limits.
+
+Admission credentials have the REST username
+`expiry:authenticated_device_id:call_id:attempt_id`. coturn removes the expiry
+before quota accounting: the host and gateway no longer share a quota, different
+media attempts are isolated, and retries/credential renewal of the same attempt
+retain their quota identity.
+
+`GET /v1/rtc/ice-servers` intentionally retains call-independent
+`expiry:authenticated_device_id` credentials for compatibility with source
+clients' credential caches. All calls and probes using that cached credential
+share the **device-wide** quota, but never the other endpoint's quota. Neither a
+fresh expiry nor a per-response nonce would isolate multiple calls reusing one
+cached credential. True per-attempt source isolation requires a coordinated API
+and client cache-key change; it is not provided by this server-only fix.
+
+The 16-allocation user default leaves room for multiple interfaces, UDP/TCP
+gathering and limited overlap of cached-source calls/probes. Both endpoints draw
+from the total quota. With the standard 100-port range, the total default leaves
+20 ports spare; allocations with extra port reservations, occupied host ports or
+small configured ranges can reduce actual capacity. These defaults are not a
+measured worst-case guarantee. Size the range and both quotas together for the
+deployment's peak; an external TURN deployment must configure its own quotas.
+No allocation lifetime or client close behavior is changed by this fix.
+
 ## Authenticated adapter endpoints
 
 All paths use the existing paired bearer session under `/v1`:
@@ -104,6 +136,14 @@ selection, committed SDP operation types, ICE/DTLS state, audio gating,
 packet/PCM counters and selected candidate types. The API records the same
 call/leg IDs and authorized operations. SDP, credentials and DTMF digits are
 not included in these diagnostics. UI displays the frozen media transport.
+After a non-duplicate committed signal `close`, the API also logs
+`RTC media close observed`, the actor role and `media_stage`:
+`before_cellular_active` or `after_cellular_active`. This only reports whether
+the gateway's cellular/audio activation was persisted. `ice_state=not_reported`
+is explicit: an SDP answer/negotiated phase is not proof of ICE connectivity,
+and the server cannot infer a TURN 486 or distinguish network failure from a
+user cancellation. Diagnose the network cause using peer/coturn logs. This
+observation does not cover closes caused only by authorization/lease expiry.
 
 An emulator can prove real native encrypted media with synthetic PCM replacing
 physical audio hardware, along with Telecom call events and application call

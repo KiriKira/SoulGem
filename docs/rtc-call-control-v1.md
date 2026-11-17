@@ -87,6 +87,29 @@ Invitation deadlines are 25 seconds incoming and 30 seconds outgoing. Polling
 cannot extend them. Both device identities, the exact current bearer session,
 owner, participant, SIM revision and shared gateway slot are rechecked.
 
+## Test calls (`test_call_v1`)
+
+A host can ask its gateway for a test call: a virtual incoming call that plays
+a recording, used to check ringing, answering, media and relays end to end
+without a cellular call.
+
+1. The host sends `POST /v1/rtc/control/test-calls` with `{version, operation_id,
+   gateway_id}`. The server checks that the gateway is online with live call
+   control and has no call or pending test, then stores a request for 30 s.
+   Replaying the operation returns the same request (`201`, then `200`).
+2. The gateway's `GET /v1/rtc/control/calls` list carries
+   `test_call_requests` (request id, requesting client, expiry).
+3. The gateway answers one with an ordinary `POST /v1/rtc/control/incoming`
+   plus `test_request_id`, using one of its active SIM bindings. The call is
+   marked `test: true` and rings only the requesting host; every other rule
+   (SIM revision, gateway slot, replay) is the normal incoming one. An expired
+   or used request is `404`; a request for a gateway that is already in a call
+   is refused as busy.
+4. From there it is a normal incoming call: `accept`, `winner`,
+   `media/active`, `active`, and the gateway reports `ended` when the
+   recording finishes or the host hangs up. No cellular call exists, so the
+   gateway ends a test call itself whenever the server marks it `unknown`.
+
 ## Failure, restart and shared occupancy
 
 Go checks control leases every five seconds, with a 20-second lease. Expired

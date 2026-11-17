@@ -1,6 +1,6 @@
 # TURN 与节点解耦、Cloudflare 支持与 Worker 版节点：目标与计划
 
-更新：2026-11-12。状态：**目标已定，尚未实施**。本文是三端（SoulGem、Madoka、Homura）以及 Worker 版新仓库
+更新：2026-11-12。状态：**本批实现已完成，等待设备和真实 Cloudflare 验收**。详见 [实现与验收边界](turn-sources-implementation.md)。本文是三端（SoulGem、Madoka、Homura）以及 Worker 版新仓库
 [GriefSeed](https://github.com/KiriKira/GriefSeed) 共同遵守的目标文档；协议细节在对应里程碑实施时写进各自的协议文档。
 
 ## 背景
@@ -44,8 +44,8 @@ TURN 变成手机上独立配置的“**中继来源**”，和信令节点是�
 - 添加方式（已决定）：
   - **添加节点时自动带上它的 TURN**：节点声明 `ice_servers_v1` 时，加节点就同时把它加为中继来源，复用这个节点的会话，
     不需要另外配对；用户可以单独关掉某个节点的中继。GriefSeed 作为节点时，自带的 TURN 就是 Cloudflare。
-  - **单独配对一个中继来源**：扫描来源生成的链接或二维码（暂定 `gsm2sip://relay?url=...&token=...`，和现有的
-    `gsm2sip://join` 同一种方式），不用手打。链接里含 token，只在来源的管理页上显示。
+  - **单独配对一个中继来源**：扫描来源生成的链接或二维码（暂定 `mahogsm://relay?url=...&token=...`，和现有的
+    `mahogsm://join` 同一种方式），不用手打。链接里含 token，只在来源的管理页上显示。
 - 两部手机**各自**维护自己的来源列表、各自选择。ICE 允许两侧使用不同的中继，所以旧手机可以用离自己近的 TURN，
   主手机用 Cloudflare。
 - 已有节点**不需要改配置**。新接口靠升级 SoulGem 版本获得，不改任何环境变量。
@@ -123,7 +123,7 @@ Authorization: Bearer <SoulGem 会话 access token | 来源 token>
 | T1 来源抽象 | `rtcmedia` 里引入“中继来源”抽象，支持合并、去重、过滤和上限；先接入“节点下发”和“静态 TURN”；记录选中的来源 | Madoka、Homura | 单元测试覆盖合并规则；只配节点下发时行为与现在逐字节一致；自定义端口、同 URL 不同凭据及候选上限通过；KVM 模拟器里用静态 TURN、强制中继完成一次通话 |
 | T2 自动择优 | STUN RTT 测量与缓存、排序、手动置顶；通话界面显示选中的来源 | Madoka、Homura | 两个 TURN 中一个故意不通、一个高延迟时，选中符合预期；测量不拖慢来电振铃；UDP 不通但 TLS 可用、长振铃及刷新超时通过 |
 | T3 节点作为中继来源 | SoulGem 新增 `GET /v1/rtc/ice-servers` 和 `ice_servers_v1` 能力声明；一体镜像新增可选开关关闭内置 coturn（默认仍开启），用于纯信令节点；手机加节点时自动把它加为来源，可单独关闭 | SoulGem、Madoka、Homura | 旧客户端、旧节点混合运行正常；主节点 TURN 关闭时通过备用节点的 TURN 完成通话 |
-| T4 独立中继来源配对 | 手机支持扫 `gsm2sip://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
+| T4 独立中继来源配对 | 手机支持扫 `mahogsm://relay` 链接添加独立来源，调用中继来源协议；来源 token 加密保存 | Madoka、Homura | 用 T5 的 GriefSeed 作为来源，真机经 Cloudflare TURN、强制中继完成通话；日志不出现凭据和 token |
 | T5 GriefSeed 的 Cloudflare TURN（G3a） | GriefSeed：中继来源协议、版本化签名 token、SQLite DO 持久化 token 管理、主动撤销与竞态处理、Deploy 按钮、升级说明 | GriefSeed | 从按钮部署和升级后 token 状态及验签能力可恢复；伪造签名在 Worker 拒绝且不调用 DO，真实签名仍查 DO；吊销后拒绝新签发并撤销名下未过期凭据，失败可恢复重试；记录新 Allocate 拒绝及已有中继的停止时间；不需要命令行；按请求预算实测一天的用量 |
 | T6 GriefSeed 节点本体（G3b） | 另起设计文档：协议子集、DO 数据模型、租约/恢复、冷备模式、请求预算；多 owner 前置端到端加密 | GriefSeed、Madoka、Homura | 先冻结设计与预算；实现后通过下述断线、租约和兼容验收 |
 
@@ -165,3 +165,25 @@ T1、T2 不依赖服务器改动，可以先做；T3 和 T1 可以并行。T4 �
 GriefSeed 的来源 token 用 Worker 自带的管理页管理，T5 起采用版本化签名并由 DO 核验登记与吊销；Worker 版节点先只支持一个 owner。
 
 1. 使用 Cloudflare Realtime 是否必须绑定付款方式（文档未说明，需要实际注册确认）。
+
+## 后续事项（暂不排期）
+
+### IPv6（2026-11-14 记录，现有功能完成后再做）
+
+现状（按代码核对）：
+
+- **HTTPS 信令**：API 监听 `:8080`，Linux 上同时接受 IPv4/IPv6；前置的 Docker 端口映射、反向代理和安全组也要放行 IPv6。用 `curl -6 https://<域名>/v1/capabilities` 验证。
+- **内置 TURN 只支持 IPv4**：`deploy/allinone/turn-config.py` 写死 `listening-ip=0.0.0.0`、IPv4 `relay-ip`，下发的是 IPv4 字面量地址（不是域名），所以只给域名加 AAAA 不起作用。`deploy/turn` 同样只接受 IPv4。
+- **手机直连**：两端 WebRTC 没有禁用 IPv6，双方都有公网 IPv6 时可能已经直连成功，但从未实测；当前日志只有候选类型，看不出地址族。
+- **Cloudflare TURN**：下发域名 `turn.cloudflare.com`，大概率支持 IPv6，未核实。
+
+要做的事：
+
+1. 先确认直连：在通话统计里记录选中路径两端的地址族（v4/v6，不记录 IP），用两台真机在移动网络下实测。
+2. 自建 TURN 支持 IPv6（一体镜像和 `deploy/turn` 都要改）：
+   - coturn 同时监听 IPv4 和 IPv6，各配一个 `relay-ip`；需要能发现或配置服务器的 IPv6 地址。
+   - 下发地址：加 IPv6 字面量地址，或改为下发同时有 A/AAAA 的域名。
+   - **安全**：`denied-peer-ip` 补上 IPv4 映射地址 `::ffff:0:0/96` 和 NAT64 前缀 `64:ff9b::/96`，否则可绕过 IPv4 内网限制，把 TURN 当作访问服务器内网的跳板。
+   - 实测 coturn 在双栈下给 IPv6 客户端分配的中继地址族，以及 IPv6 客户端经 IPv4 中继到对端是否正常。
+   - 部署文档：推荐 host 网络；安全组放行 IPv6 的 TURN 监听端口和中继端口段。
+3. 验收：当前模拟器环境基本没有 IPv6，需要有 IPv6 的测试机加真机，或者单独搭建双栈的测试网络。

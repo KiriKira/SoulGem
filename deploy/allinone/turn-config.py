@@ -57,6 +57,12 @@ def public_address(private):
           'For NAT without STUN access, reuse PUBLIC_IP or set TURN_PUBLIC_IP.', file=sys.stderr)
     return private
 
+def positive_limit(name, default, maximum):
+    value = env.get(name) or str(default)
+    if not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > maximum:
+        raise ValueError(f'{name} must be in 1..{maximum}; zero disables quota protection')
+    return int(value)
+
 def port(name, default):
     value = env.get(name, str(default))
     if not re.fullmatch(r'[1-9][0-9]{0,4}', value) or int(value) > 65535:
@@ -71,6 +77,12 @@ try:
     maximum = port('TURN_RELAY_MAX_PORT', 49259)
     if minimum > maximum or minimum <= listener <= maximum:
         raise ValueError('TURN relay range must be ordered and exclude its listening port')
+    # Allocation budgets, not call counts: allow UDP/TCP, multiple interfaces
+    # and bounded overlap for device-cached source credentials. Defaults leave
+    # 20 ports spare in the standard 100-port range; this is not a capacity guarantee.
+    capacity = maximum - minimum + 1
+    total_quota = positive_limit('TURN_TOTAL_QUOTA', min(80, capacity), capacity)
+    user_quota = positive_limit('TURN_USER_QUOTA', min(16, total_quota), total_quota)
     secret = env.get('RTC_TURN_SHARED_SECRET')
     if not secret:
         key = base64.b64decode(env['SECRETS_ENCRYPTION_KEY'], validate=True)
@@ -86,7 +98,8 @@ try:
         'relay-ip=' + private, 'min-port=' + str(minimum), 'max-port=' + str(maximum),
         'realm=' + realm, 'use-auth-secret', 'static-auth-secret=' + secret,
         'fingerprint', 'no-cli', 'no-tls', 'no-dtls', 'no-tcp-relay',
-        'no-multicast-peers', 'user-quota=4', 'total-quota=64',
+        'no-multicast-peers', 'user-quota=' + str(user_quota),
+        'total-quota=' + str(total_quota),
         'log-file=stdout', 'simple-log',
     ]
     if public != private:

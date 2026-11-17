@@ -16,6 +16,7 @@ DATA=/data
 PGDATA="$DATA/postgres"
 RUN_DIR=/run/gsm2sip
 install -d -m 0755 "$RUN_DIR"
+rm -f "$RUN_DIR/turn-supervisor.pid"
 install -d -m 0700 "$DATA/secrets"
 
 # Generated once and kept in the data volume unless supplied by the operator.
@@ -107,7 +108,11 @@ fi
 
 # The image manages its own relay and credentials. Explicit TURN URLs select
 # an external relay instead.
-if [ -z "${RTC_TURN_URLS:-}" ]; then
+case "${BUILTIN_TURN_ENABLED:-true}" in
+    true|false) ;;
+    *) printf '%s\n' 'BUILTIN_TURN_ENABLED must be true or false' >&2; stop_all; exit 1 ;;
+esac
+if [ "${BUILTIN_TURN_ENABLED:-true}" = true ] && [ -z "${RTC_TURN_URLS:-}" ]; then
     if ! SECRETS_ENCRYPTION_KEY="$SECRETS_ENCRYPTION_KEY" PUBLIC_IP="${PUBLIC_IP:-}" \
         python3 /usr/local/libexec/gsm2sip-turn-config.py; then
         stop_all

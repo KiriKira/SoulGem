@@ -30,6 +30,7 @@ docker run -d --name gsm2sip --restart unless-stopped --network host \
 - 容器自带 TURN 中继：TURN 密钥由安装密钥派生，监听 `0.0.0.0:3478`（UDP/TCP），中继端口 49160–49259/udp，
   对外地址自动探测。云安全组/路由器要放行这些端口；端口可用 `TURN_LISTEN_PORT`、`TURN_RELAY_MIN_PORT`、
   `TURN_RELAY_MAX_PORT` 修改。探测不到公网地址时设 `PUBLIC_IP`（或 `TURN_PUBLIC_IP`）。
+- 纯信令部署可设 `BUILTIN_TURN_ENABLED=false` 关闭内置 coturn；默认仍为 true。手机须另外配置可用中继（或使用直连）。
 - 已有外部 TURN 时设 `RTC_TURN_URLS` 与 `RTC_TURN_SHARED_SECRET`，容器就不再启动自带中继。
 - 其他端口：`HTTP_PORT`（默认 8080）；内部 PostgreSQL（`PG_PORT`，默认 55432）只监听 127.0.0.1。
 

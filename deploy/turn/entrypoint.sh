@@ -30,6 +30,22 @@ port TURN_RELAY_MAX_PORT "$TURN_RELAY_MAX_PORT"
 if [ "$TURN_LISTEN_PORT" -ge "$TURN_RELAY_MIN_PORT" ] && [ "$TURN_LISTEN_PORT" -le "$TURN_RELAY_MAX_PORT" ]; then
     echo 'TURN listener must be outside the relay range' >&2; exit 2
 fi
+# Match the all-in-one allocation budgets, including device-cached credentials.
+capacity=$((TURN_RELAY_MAX_PORT - TURN_RELAY_MIN_PORT + 1))
+total_default=80
+[ "$capacity" -ge "$total_default" ] || total_default=$capacity
+TURN_TOTAL_QUOTA=${TURN_TOTAL_QUOTA:-$total_default}
+limit() {
+    case "$2" in ''|0*|*[!0-9]*) echo "Invalid $1: expected quota 1..$3" >&2; exit 2;; esac
+    [ "${#2}" -le 5 ] && [ "$2" -le "$3" ] || {
+        echo "Invalid $1: expected quota 1..$3" >&2; exit 2;
+    }
+}
+limit TURN_TOTAL_QUOTA "$TURN_TOTAL_QUOTA" "$capacity"
+user_default=16
+[ "$TURN_TOTAL_QUOTA" -ge "$user_default" ] || user_default=$TURN_TOTAL_QUOTA
+TURN_USER_QUOTA=${TURN_USER_QUOTA:-$user_default}
+limit TURN_USER_QUOTA "$TURN_USER_QUOTA" "$TURN_TOTAL_QUOTA"
 cat > /tmp/gsm2sip-turn.conf <<EOF
 pidfile=/tmp/turnserver.pid
 relay-threads=1
@@ -48,8 +64,8 @@ no-tls
 no-dtls
 no-tcp-relay
 no-multicast-peers
-user-quota=4
-total-quota=64
+user-quota=$TURN_USER_QUOTA
+total-quota=$TURN_TOTAL_QUOTA
 denied-peer-ip=0.0.0.0-0.255.255.255
 denied-peer-ip=10.0.0.0-10.255.255.255
 denied-peer-ip=100.64.0.0-100.127.255.255

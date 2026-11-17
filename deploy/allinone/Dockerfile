@@ -55,7 +55,7 @@ COPY deploy/allinone/turn-config.py /usr/local/libexec/gsm2sip-turn-config.py
 COPY deploy/allinone/run.sh /usr/local/bin/gsm2sip-allinone
 COPY deploy/allinone/admin.sh /usr/local/bin/mahogsm-admin
 COPY deploy/allinone/healthcheck.sh /usr/local/bin/gsm2sip-allinone-healthcheck
-RUN chmod 0755 /usr/local/bin/gsm2sip-allinone /usr/local/bin/mahogsm-admin \
+RUN chmod -R a+rX /app/migrations && chmod 0755 /usr/local/bin/gsm2sip-allinone /usr/local/bin/mahogsm-admin \
       /usr/local/bin/gsm2sip-allinone-healthcheck
 
 ENV MIGRATIONS_DIR=/app/migrations
